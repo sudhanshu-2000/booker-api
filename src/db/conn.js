@@ -15,8 +15,8 @@ con.getConnection((err) => {
 });
 const queryAsync = (sql, params, connection) => {
   return new Promise((resolve, reject) => {
-    const con3 = connection || con;
-    con3.query(sql, params, (err, results) => {
+    const con1 = connection || con;
+    con1.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
       } else {
@@ -25,23 +25,23 @@ const queryAsync = (sql, params, connection) => {
     });
   });
 };
-const con2 = mysql.createPool({
+
+const con3 = mysql.createPool({
   connectionLimit: 10,
   host: "localhost",
   port: 3306,
   user: "root",
   password: "",
-  database: "colorgame",
-  multipleStatements: true,
-  timezone: 'utc'
+  database: "booker-games",
+  multipleStatements: true
 });
-con2.getConnection((err) => {
+con3.getConnection((err) => {
   if (err) throw err;
-  console.log("Database(Color-Prediction) Connected");
+  console.log("Database(booker-games) Connected");
 });
-const queryAsync2 = (sql, params, connection2) => {
+const queryAsync3 = (sql, params, connection3) => {
   return new Promise((resolve, reject) => {
-    const conn = connection2 || con2;
+    const conn = connection3 || con3;
     conn.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
@@ -51,8 +51,7 @@ const queryAsync2 = (sql, params, connection2) => {
     });
   });
 };
-module.exports = { con, queryAsync, con2, queryAsync2 };
-
+module.exports = { con, queryAsync, con3, queryAsync3 };
 
 
 // var mysql = require("mysql");
@@ -72,8 +71,8 @@ module.exports = { con, queryAsync, con2, queryAsync2 };
 // });
 // const queryAsync = (sql, params, connection) => {
 //   return new Promise((resolve, reject) => {
-//     const con3 = connection || con;
-//     con3.query(sql, params, (err, results) => {
+//     const con1 = connection || con;
+//     con1.query(sql, params, (err, results) => {
 //       if (err) {
 //         reject(err);
 //       } else {
@@ -82,23 +81,23 @@ module.exports = { con, queryAsync, con2, queryAsync2 };
 //     });
 //   });
 // };
-// const con2 = mysql.createPool({
+
+// const con3 = mysql.createPool({
 //   connectionLimit: 10,
 //   host: "localhost",
 //   port: 3306,
-//   user: "kmaobharat_colorgame",
-//   password: "MG)U-S8&fp)M",
-//   database: "kmaobharat_colorgame",
-//   multipleStatements: true,
-//   timezone: 'utc'
+//   user: "kmaobharat_booker_games",
+//   password: "Z]RP~fu)^nRA",
+//   database: "kmaobharat_booker_games",
+//   multipleStatements: true
 // });
-// con2.getConnection((err) => {
+// con3.getConnection((err) => {
 //   if (err) throw err;
-//   console.log("Database(Color-Prediction) Connected");
+//   console.log("Database(booker-games) Connected");
 // });
-// const queryAsync2 = (sql, params, connection2) => {
+// const queryAsync3 = (sql, params, connection3) => {
 //   return new Promise((resolve, reject) => {
-//     const conn = connection2 || con2;
+//     const conn = connection3 || con3;
 //     conn.query(sql, params, (err, results) => {
 //       if (err) {
 //         reject(err);
@@ -108,4 +107,4 @@ module.exports = { con, queryAsync, con2, queryAsync2 };
 //     });
 //   });
 // };
-// module.exports = { con, queryAsync, con2, queryAsync2 };
+// module.exports = { con, queryAsync, con3, queryAsync3 };

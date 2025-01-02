@@ -286,7 +286,20 @@ app.post("/update-user-password", verifytoken, async (req, res) => {
 })
 app.post("/get-user-statement", verifytoken, async (req, res) => {
   try {
-    const result = await queryAsync("SELECT * FROM `statement` where `number`=?", [req.body.id]);
+    const result = await queryAsync("SELECT * FROM `statement` where `number`=? ORDER BY `statement`.`id` ASC", [req.body.id]);
+    res.status(200).json({
+      error: false,
+      status: true,
+      data: result
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({ error: true, status: false, message: 'Internal Server Error' });
+  }
+})
+app.post("/get-wallet-statement", verifytoken, async (req, res) => {
+  try {
+    const result = await queryAsync("SELECT * FROM `game_statement` where `username`=? ORDER BY `game_statement`.`id` ASC", [req.body.id]);
     res.status(200).json({
       error: false,
       status: true,
@@ -733,30 +746,81 @@ app.post("/get-deposit-request", verifytoken, async (req, res) => {
   }
 });
 app.post("/approve-deposit-request", verifytoken, async (req, res) => {
+  const { id, username, mobile } = req.body;
+  if (!id || !username || !mobile) {
+    return res.status(400).json({ error: true, message: "Invalid input data" });
+  }
   try {
-    const checkusdt = await queryAsync("SELECT * FROM `deposit` WHERE  `id` = ?;", [req.body.id]);
-    if (checkusdt[0].status == 'Pending') {
-      await queryAsync("UPDATE `deposit` SET `status` = 'Success', `Approved_declined_By` = ? WHERE `id` = ?", [req.body.username, req.body.id]);
-      if (checkusdt[0].payment_type == 'USDT') {
-        await queryAsync("UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT (`balance`*`price_at_that_time`) FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?", [req.body.id, req.body.mobile]);
-        await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,(SELECT (`balance`*`price_at_that_time`) FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))", [req.body.mobile, 'Deposit', `Approve By ${req.body.username}`, req.body.id, req.body.mobile]);
-      } else {
-        await queryAsync("UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT `balance` FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?", [req.body.id, req.body.mobile]);
-        await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,(SELECT `balance` FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [req.body.mobile, 'Deposit', `Approve By ${req.body.username}`, req.body.id, req.body.mobile]);
-      }
-      res.status(200).json({
-        error: false,
-        status: true,
-        message: "Wallet updated successfully",
-      });
-    } else {
+    const deposit = await queryAsync("SELECT * FROM `deposit` WHERE `id` = ?", [id]);
+    if (!deposit.length) {
+      return res.status(404).json({ error: true, message: "Deposit not found" });
+    }
+    if (deposit[0].status !== "Pending") {
       return res.status(302).json({
         error: true,
         status: false,
-        message: "Deposit Request is already Updated",
+        message: "Deposit request is already updated",
       });
     }
+    await queryAsync(
+      "UPDATE `deposit` SET `status` = 'Success', `Approved_declined_By` = ? WHERE `id` = ?",
+      [username, id]
+    );
+    const referral = await queryAsync(
+      "SELECT * FROM `user_reffer` WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)",
+      [mobile]
+    );
+    if (referral.length && referral[0].status === "N") {
+      await queryAsync(
+        "UPDATE `user_reffer` SET `status` = 'Y' WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)",
+        [mobile]
+      );
+      const referralBonus = await queryAsync(
+        "SELECT `reffer_to`, `reffer_by` FROM `reffer_bonus` WHERE `status` = 'Y'"
+      );
+      if (referralBonus.length > 0) {
+        const { reffer_to, reffer_by } = referralBonus[0];
+        await queryAsync(
+          "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = ?",
+          [reffer_by, mobile]
+        );
+        await queryAsync(
+          "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = (SELECT `mobile` FROM `user_details` WHERE `reffer_code` = ?)",
+          [reffer_to, referral[0].reffer_to]
+        );
+        await queryAsync(
+          `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+           VALUES (?, ?, ?, ?, (SELECT wallet_balance FROM wallet WHERE user_name = ?))`,
+          [mobile, "Referral Bonus", `Referred by ${referral[0].reffer_by}`, reffer_by, mobile]
+        );
+        await queryAsync(
+          `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+           VALUES ((SELECT mobile FROM user_details WHERE reffer_code = ?), ?, ?, ?, 
+           (SELECT wallet_balance FROM wallet WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ?)))`,
+          [referral[0].reffer_to, "Referral Bonus", `Referred to ${mobile}`, reffer_to, referral[0].reffer_to]
+        );
+      }
+    }
+    const walletUpdateQuery =
+      deposit[0].payment_type === "USDT"
+        ? "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT (`balance` * `price_at_that_time`) FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?"
+        : "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT `balance` FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?";
+    await queryAsync(walletUpdateQuery, [id, mobile]);
+    const statementQuery = deposit[0].payment_type === "USDT"
+      ? `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+         VALUES (?, ?, ?, (SELECT (\`balance\` * \`price_at_that_time\`) FROM \`deposit\` WHERE \`id\` = ?), 
+         (SELECT wallet_balance FROM wallet WHERE user_name = ?))`
+      : `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+         VALUES (?, ?, ?, (SELECT \`balance\` FROM \`deposit\` WHERE \`id\` = ?), 
+         (SELECT wallet_balance FROM wallet WHERE user_name = ?))`;
+    await queryAsync(statementQuery, [mobile, "Deposit", `Approved by ${username}`, id, mobile,a]);
+    res.status(200).json({
+      error: false,
+      status: true,
+      message: "Wallet updated successfully",
+    });
   } catch (err) {
+    console.error(err);
     res.status(500).json({
       error: true,
       message: "Internal Server Error",
@@ -768,6 +832,7 @@ app.post("/decline-deposit-request", verifytoken, async (req, res) => {
     const checkusdt = await queryAsync("SELECT * FROM `deposit` WHERE  `id` = ?;", [req.body.id]);
     if (checkusdt[0].status == 'Pending') {
       await queryAsync("UPDATE `deposit` SET `status` = ?, `reason` = ?, `Approved_declined_By` = ? WHERE `id` = ?", ["Cancelled", req.body.reason, req.body.username, req.body.id]);
+      await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES ((SELECT `user_name` FROM `deposit` WHERE `id` = ?),?,?,(SELECT `balance` FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)))", [req.body.id, 'Deposit', `Decliend By ${req.body.username}`, req.body.id, req.body.id]);
       res.status(200).json({
         error: false,
         status: true,
@@ -789,6 +854,23 @@ app.post("/decline-deposit-request", verifytoken, async (req, res) => {
   }
 });
 
+app.post("/get-withdrawal-request-date", verifytoken, async (req, res) => {
+  try {
+    let query = "SELECT *,(SELECT ud.username from user_details as ud where ud.mobile = cd.user_name) as uname FROM `deposit` as cd WHERE cd.transaction_id IS NULL AND date BETWEEN ? AND ?";
+    if (req.body.status === "Pending") {
+      query += " AND cd.status = 'Pending'";
+    } else if (req.body.status === "Success") {
+      query += " AND cd.status = 'Success'";
+    } else if (req.body.status === "Cancelled") {
+      query += " AND cd.status = 'Cancelled'";
+    }
+    const result = await queryAsync(query, [req.body.start, req.body.end]);
+    res.status(200).json({ error: false, status: true, data: result });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
 app.post("/get-withdrawal-request", verifytoken, async (req, res) => {
   try {
     let query = "SELECT *,(SELECT ud.username from user_details as ud where ud.mobile = cd.user_name) as uname FROM `deposit` as cd WHERE cd.transaction_id IS NULL ";
@@ -799,9 +881,6 @@ app.post("/get-withdrawal-request", verifytoken, async (req, res) => {
     } else if (req.body.status === "Cancelled") {
       query += " AND cd.status = 'Cancelled'";
     }
-    // if(req.body.start_date){
-    //   query += ` AND cd.date BETWEEN ${req.body.start_date} AND ${req.body.end_date};`;
-    // }
     const result = await queryAsync(query, []);
     res.status(200).json({ error: false, status: true, data: result });
   } catch (err) {
@@ -943,10 +1022,10 @@ app.post("/decline-withdrawal-request", verifytoken, async (req, res) => {
         const checkusdt = await queryAsync("SELECT * FROM `deposit` WHERE  `id` = ?;", [req.body.id]);
         if (checkusdt[0].payment_type == 'USDT') {
           await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + (SELECT (`balance`*`price_at_that_time`) FROM `deposit` WHERE `id` = ?) WHERE `user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)", [req.body.id, req.body.id]);
-          await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES ((SELECT `user_name` FROM `deposit` WHERE `id` = ?),?,?,(SELECT (`balance`*`price_at_that_time`) FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)))", [req.body.id, 'Deposit', `Decliend By ${req.body.username}`, req.body.id, req.body.id]);
+          await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES ((SELECT `user_name` FROM `deposit` WHERE `id` = ?),?,?,(SELECT (`balance`*`price_at_that_time`) FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)))", [req.body.id, 'Withdrawal', `Decliend By ${req.body.username}`, req.body.id, req.body.id]);
         } else {
           await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + (SELECT `balance` FROM `deposit` WHERE `id` = ?) WHERE `user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)", [req.body.id, req.body.id]);
-          await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES ((SELECT `user_name` FROM `deposit` WHERE `id` = ?),?,?,(SELECT `balance` FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)))", [req.body.id, 'Deposit', `Decliend By ${req.body.username}`, req.body.id, req.body.id]);
+          await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES ((SELECT `user_name` FROM `deposit` WHERE `id` = ?),?,?,(SELECT `balance` FROM `deposit` WHERE `id` = ?),(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = (SELECT `user_name` FROM `deposit` WHERE `id` = ?)))", [req.body.id, 'Withdrawal', `Decliend By ${req.body.username}`, req.body.id, req.body.id]);
         }
         res.status(200).json({
           error: false,
@@ -1098,11 +1177,8 @@ app.post("/update-wagering", upload.single("image"), verifytoken, async (req, re
 
 app.post("/add-investment-plan", verifytoken, async (req, res) => {
   try {
-    const { plan_name, amount_start, amount_end, retrun_percentage, plan_expire } = req.body;
-    const existingPlan = await queryAsync(
-      "SELECT `plan_name` FROM `new_investment_plan` WHERE `plan_name` = ?",
-      [plan_name]
-    );
+    const { plan_name, amount_start, amount_end, retrun_percentage } = req.body;
+    const existingPlan = await queryAsync("SELECT `plan_name` FROM `new_investment_plan` WHERE `plan_name` = ?", [plan_name]);
     if (existingPlan.length > 0) {
       return res.status(400).json({
         error: true,
@@ -1111,8 +1187,8 @@ app.post("/add-investment-plan", verifytoken, async (req, res) => {
       });
     }
     await queryAsync(
-      "INSERT INTO `new_investment_plan`(`plan_name`, `amount_start`, `amount_end`, `retrun_percentage`, `plan_expire`) VALUES (?,?,?,?,?)",
-      [plan_name, amount_start, amount_end, retrun_percentage, plan_expire]
+      "INSERT INTO `new_investment_plan`(`plan_name`, `amount_start`, `amount_end`, `retrun_percentage`) VALUES (?,?,?,?)",
+      [plan_name, amount_start, amount_end, retrun_percentage]
     );
     res.status(200).json({
       error: false,
@@ -1120,16 +1196,14 @@ app.post("/add-investment-plan", verifytoken, async (req, res) => {
       message: "Investment Plan Added Successfully!",
     });
   } catch (err) {
+    console.log(err);
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
 });
-app.put("/update-investment-plan", verifytoken, async (req, res) => {
+app.post("/update-investment-plan", verifytoken, async (req, res) => {
   try {
-    const { plan_name, amount_start, amount_end, retrun_percentage, plan_expire, id } = req.body;
-    const existingPlan = await queryAsync(
-      "SELECT `id` FROM `new_investment_plan` WHERE `id` = ?",
-      [id]
-    );
+    const { plan_name, amount_start, amount_end, retrun_percentage, id } = req.body;
+    const existingPlan = await queryAsync("SELECT `id` FROM `new_investment_plan` WHERE `id` = ?", [id]);
     if (existingPlan.length === 0) {
       return res.status(404).json({
         error: true,
@@ -1137,10 +1211,7 @@ app.put("/update-investment-plan", verifytoken, async (req, res) => {
         message: "Investment Plan not found!",
       });
     }
-    const duplicatePlan = await queryAsync(
-      "SELECT `id` FROM `new_investment_plan` WHERE `plan_name` = ? AND `id` != ?",
-      [plan_name, id]
-    );
+    const duplicatePlan = await queryAsync("SELECT `id` FROM `new_investment_plan` WHERE `plan_name` = ? AND `id` != ?", [plan_name, id]);
 
     if (duplicatePlan.length > 0) {
       return res.status(400).json({
@@ -1150,8 +1221,8 @@ app.put("/update-investment-plan", verifytoken, async (req, res) => {
       });
     }
     await queryAsync(
-      "UPDATE `new_investment_plan` SET `plan_name` = ?, `amount_start` = ?, `amount_end` = ?, `retrun_percentage` = ?, `plan_expire` = ? WHERE `id` = ?",
-      [plan_name, amount_start, amount_end, retrun_percentage, plan_expire, id]
+      "UPDATE `new_investment_plan` SET `plan_name` = ?, `amount_start` = ?, `amount_end` = ?, `retrun_percentage` = ? WHERE `id` = ?",
+      [plan_name, amount_start, amount_end, retrun_percentage, id]
     );
     res.status(200).json({
       error: false,
@@ -1219,6 +1290,149 @@ app.post("/get-payment-details", verifytoken, async (req, res) => {
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
 })
+app.post("/add-payment-details", upload.single("image"), verifytoken, async (req, res) => {
+  const { type, name, number, upi, account_holder_name, account_no, bank_name, ifsc_code, account_type } = req.body;
+  const qrCodeFile = req.file?.filename || null;
+  try {
+    let existingQuery, insertQuery, insertParams;
+    if (upi) {
+      existingQuery = "SELECT * FROM new_payment_details WHERE upi_id = ?";
+      insertQuery = "INSERT INTO `new_payment_details`(`name`, `upi_id`, `qr_code`, `number`, `type`) VALUES (?,?,?,?,?)";
+      insertParams = [name, upi, qrCodeFile, number, type];
+    } else if (account_no) {
+      existingQuery = "SELECT * FROM new_payment_details WHERE ac_no = ?";
+      insertQuery = "INSERT INTO `new_payment_details`(`name`, `ac_no`, `ac_type`, `ifsc_code`, `bank_name`, `type`) VALUES (?,?,?,?,?,?)";
+      insertParams = [account_holder_name, account_no, account_type, ifsc_code, bank_name, type];
+    } else {
+      if (qrCodeFile) deleteImage(req.file.destination + '/' + req.file.filename);
+      return res.status(400).json({ error: true, status: false, message: "Invalid input data" });
+    }
+    const existing = await queryAsync(existingQuery, [upi || account_no]);
+    if (existing.length > 0) {
+      if (qrCodeFile) deleteImage(req.file.destination + '/' + req.file.filename);
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: `${upi ? "UPI ID" : "Account Number"} already exists`,
+      });
+    }
+
+    await queryAsync(insertQuery, insertParams);
+    res.status(200).json({
+      error: false,
+      status: true,
+      message: `${upi ? "UPI" : "Bank"} details added successfully`,
+    });
+  } catch (err) {
+    if (qrCodeFile) deleteImage(req.file.destination + '/' + req.file.filename);
+    console.error("Error occurred:", err);
+    res.status(500).json({ error: true, status: false, message: "Internal server error" });
+  }
+}
+);
+app.post("/status-payment-details", verifytoken, (req, res) => {
+  con.query(
+    "UPDATE `new_payment_details` SET `status`=? WHERE `id`= ?",
+    [req.body.method, req.body.id],
+    (err, result) => {
+      if (err) throw err;
+      if (result) {
+        res.status(200).json({
+          error: false,
+          status: true,
+          massage: " Status Changed SuccessFully",
+        });
+      }
+    }
+  );
+});
+app.post("/del-payment-details", verifytoken, (req, res) => {
+  con.query(
+    "DELETE FROM `new_payment_details` where id=?",
+    [req.body.id],
+    (err, result) => {
+      if (err) {
+        if (true == (err.sqlMessage == "Cannot delete or update a parent row: a foreign key constraint fails (`colorgame`.`deposit`, CONSTRAINT `paymethod_id` FOREIGN KEY (`paymethod_id`) REFERENCES `payment_details` (`id`))")) {
+          res.status(405).json({
+            error: true,
+            status: false,
+            massage: "This payment method is already Used",
+          });
+        } else {
+          throw err;
+        }
+      }
+      else {
+        res.status(200).json({
+          error: false,
+          status: true,
+          massage: "Your file has been deleted.",
+        });
+      }
+    }
+  );
+});
+
+
+app.post("/add-reffer", verifytoken, async (req, res) => {
+  try {
+    const { reffer_to, reffer_by } = req.body;
+    await queryAsync("INSERT INTO `reffer_bonus`(`reffer_to`, `reffer_by`) VALUES (?,?)", [reffer_to, reffer_by]);
+    res.status(200).json({
+      error: false,
+      status: true,
+      message: "Reffer Added Successfully!",
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
+app.post("/update-reffer", verifytoken, async (req, res) => {
+  try {
+    const { reffer_to, reffer_by, id } = req.body;
+    await queryAsync(
+      "UPDATE `reffer_bonus` SET `reffer_to` = ?, `reffer_by` = ? WHERE `id` = ?",
+      [reffer_to, reffer_by, id]
+    );
+    res.status(200).json({
+      error: false,
+      status: true,
+      message: "Investment Plan Updated Successfully!",
+    });
+  } catch (err) {
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
+app.post("/status-reffer", verifytoken, async (req, res) => {
+  try {
+    await queryAsync("UPDATE `reffer_bonus` SET `status` = 'N' WHERE `status` = 'Y'");
+    await queryAsync("UPDATE `reffer_bonus` SET `status` = ? WHERE `id` = ?", [req.body.status, req.body.id]);
+    res.status(200).json({ error: false, status: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
+app.post("/get-reffer", verifytoken, async (req, res) => {
+  try {
+    const result = await queryAsync("SELECT * FROM `reffer_bonus`");
+    res.status(200).json({
+      error: false,
+      status: true,
+      data: result
+    });
+  } catch (err) {
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
+app.post("/del-reffer", verifytoken, async (req, res) => {
+  try {
+    await queryAsync("DELETE FROM `reffer_bonus` WHERE `id` = ?", [req.body.id]);
+    res.status(200).json({ error: false, status: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: "Internal Server Error" });
+  }
+});
 
 const agent = async (amount, user) => {
   const percentage2 = ((5 / 100) * parseFloat(amount)).toFixed(2);
@@ -1285,6 +1499,19 @@ function deleteImage(imagePath) {
       if (err) { return; }
     });
   });
+}
+// Helper function to get payment method icon
+function getIcon(paymentMethod) {
+  switch (paymentMethod) {
+    case "Google Pay":
+      return "googlepay.png";
+    case "Phone Pe":
+      return "phonepe.png";
+    case "Paytm":
+      return "paytm.png";
+    default:
+      return "upi.png";
+  }
 }
 
 module.exports = app;
