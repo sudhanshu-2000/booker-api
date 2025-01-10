@@ -9,8 +9,12 @@ const path = require('path');
 const bcrypt = require("bcrypt");
 var bodyParser = require("body-parser");
 const verifytoken = require('../middle/admin-auth')
+const cron = require('node-cron');
 app.use(cors());
+const https = require('https');
+const axios = require('axios');
 app.use(bodyParser.json({ limit: "50mb" }));
+const Joi = require('joi');
 app.use(bodyParser.urlencoded({
   limit: "50mb",
   extended: true,
@@ -745,20 +749,113 @@ app.post("/get-deposit-request", verifytoken, async (req, res) => {
     });
   }
 });
-app.post("/approve-deposit-request", verifytoken, async (req, res) => {
-  const { id, username, mobile } = req.body;
-  if (!id || !username || !mobile) {
-    return res.status(400).json({ error: true, message: "Invalid input data" });
+// app.post("/approve-deposit-request", verifytoken, async (req, res) => {
+//   const { id, username, mobile } = req.body;
+//   if (!id || !username || !mobile) {
+//     return res.status(400).json({ error: true, message: "Invalid input data" });
+//   }
+//   try {
+//     const deposit = await queryAsync("SELECT * FROM `deposit` WHERE `id` = ?", [id]);
+//     if (!deposit.length) {
+//       return res.status(404).json({ error: true, message: "Deposit not found" });
+//     }
+//     if (deposit[0].status !== "Pending") {
+//       return res.status(302).json({
+//         error: true,
+//         status: false,
+//         message: "Deposit request is already updated",
+//       });
+//     }
+//     await queryAsync(
+//       "UPDATE `deposit` SET `status` = 'Success', `Approved_declined_By` = ? WHERE `id` = ?",
+//       [username, id]
+//     );
+//     const referral = await queryAsync(
+//       "SELECT * FROM `user_reffer` WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)",
+//       [mobile]
+//     );
+//     if (referral.length && referral[0].status === "N") {
+//       await queryAsync(
+//         "UPDATE `user_reffer` SET `status` = 'Y' WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)",
+//         [mobile]
+//       );
+//       const referralBonus = await queryAsync(
+//         "SELECT `reffer_to`, `reffer_by` FROM `reffer_bonus` WHERE `status` = 'Y'"
+//       );
+//       if (referralBonus.length > 0) {
+//         const { reffer_to, reffer_by } = referralBonus[0];
+//         await queryAsync(
+//           "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = ?",
+//           [reffer_by, mobile]
+//         );
+//         await queryAsync(
+//           "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = (SELECT `mobile` FROM `user_details` WHERE `reffer_code` = ?)",
+//           [reffer_to, referral[0].reffer_to]
+//         );
+//         await queryAsync(
+//           `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+//            VALUES (?, ?, ?, ?, (SELECT wallet_balance FROM wallet WHERE user_name = ?))`,
+//           [mobile, "Referral Bonus", `Referred by ${referral[0].reffer_by}`, reffer_by, mobile]
+//         );
+//         await queryAsync(
+//           `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+//            VALUES ((SELECT mobile FROM user_details WHERE reffer_code = ?), ?, ?, ?, 
+//            (SELECT wallet_balance FROM wallet WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ?)))`,
+//           [referral[0].reffer_to, "Referral Bonus", `Referred to ${mobile}`, reffer_to, referral[0].reffer_to]
+//         );
+//       }
+//     }
+//     const walletUpdateQuery =
+//       deposit[0].payment_type === "USDT"
+//         ? "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT (`balance` * `price_at_that_time`) FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?"
+//         : "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT `balance` FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?";
+//     await queryAsync(walletUpdateQuery, [id, mobile]);
+//     const statementQuery = deposit[0].payment_type === "USDT"
+//       ? `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+//          VALUES (?, ?, ?, (SELECT (\`balance\` * \`price_at_that_time\`) FROM \`deposit\` WHERE \`id\` = ?), 
+//          (SELECT wallet_balance FROM wallet WHERE user_name = ?))`
+//       : `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+//          VALUES (?, ?, ?, (SELECT \`balance\` FROM \`deposit\` WHERE \`id\` = ?), 
+//          (SELECT wallet_balance FROM wallet WHERE user_name = ?))`;
+//     await queryAsync(statementQuery, [mobile, "Deposit", `Approved by ${username}`, id, mobile, a]);
+//     res.status(200).json({
+//       error: false,
+//       status: true,
+//       message: "Wallet updated successfully",
+//     });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({
+//       error: true,
+//       message: "Internal Server Error",
+//     });
+//   }
+// })
+app.post('/approve-deposit-request', verifytoken, async (req, res) => {
+  const schema = Joi.object({
+    id: Joi.number().required(),
+    username: Joi.string().alphanum().required(),
+    mobile: Joi.string().regex(/^[0-9]{10}$/).required(),
+  });
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ error: true, message: error.details[0].message });
   }
+
+  const { id, username, mobile } = req.body;
+
   try {
+    await queryAsync("START TRANSACTION");
     const deposit = await queryAsync("SELECT * FROM `deposit` WHERE `id` = ?", [id]);
     if (!deposit.length) {
+      await queryAsync("ROLLBACK");
       return res.status(404).json({ error: true, message: "Deposit not found" });
     }
     if (deposit[0].status !== "Pending") {
-      return res.status(302).json({
+      await queryAsync("ROLLBACK");
+      return res.status(400).json({
         error: true,
-        status: false,
         message: "Deposit request is already updated",
       });
     }
@@ -801,25 +898,28 @@ app.post("/approve-deposit-request", verifytoken, async (req, res) => {
         );
       }
     }
-    const walletUpdateQuery =
+    const walletUpdateAmount =
       deposit[0].payment_type === "USDT"
-        ? "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT (`balance` * `price_at_that_time`) FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?"
-        : "UPDATE `wallet` SET `wallet_balance` = wallet_balance + (SELECT `balance` FROM `deposit` WHERE `id` = ?) WHERE `user_name` = ?";
-    await queryAsync(walletUpdateQuery, [id, mobile]);
-    const statementQuery = deposit[0].payment_type === "USDT"
-      ? `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
-         VALUES (?, ?, ?, (SELECT (\`balance\` * \`price_at_that_time\`) FROM \`deposit\` WHERE \`id\` = ?), 
-         (SELECT wallet_balance FROM wallet WHERE user_name = ?))`
-      : `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
-         VALUES (?, ?, ?, (SELECT \`balance\` FROM \`deposit\` WHERE \`id\` = ?), 
-         (SELECT wallet_balance FROM wallet WHERE user_name = ?))`;
-    await queryAsync(statementQuery, [mobile, "Deposit", `Approved by ${username}`, id, mobile,a]);
+        ? deposit[0].balance * deposit[0].price_at_that_time
+        : deposit[0].balance;
+
+    await queryAsync(
+      "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = ?",
+      [walletUpdateAmount, mobile]
+    );
+    await queryAsync(
+      `INSERT INTO \`statement\` (\`number\`, \`type\`, \`description\`, \`amount\`, \`balance\`)
+       VALUES (?, ?, ?, ?, (SELECT wallet_balance FROM wallet WHERE user_name = ?))`,
+      [mobile, "Deposit", `Approved by ${username}`, walletUpdateAmount, mobile]
+    );
+    await queryAsync("COMMIT");
     res.status(200).json({
       error: false,
       status: true,
       message: "Wallet updated successfully",
     });
   } catch (err) {
+    await queryAsync("ROLLBACK");
     console.error(err);
     res.status(500).json({
       error: true,
@@ -1500,6 +1600,23 @@ function deleteImage(imagePath) {
     });
   });
 }
+
+cron.schedule('0 8,15 * * *', async () => {
+  try {
+    const agent = new https.Agent({ family: 4 });
+    const url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=inr";
+    const response = await axios.get(url, { httpsAgent: agent });
+    if (response.data && response.data.tether && response.data.tether.inr) {
+      const usdtPriceInInr = response.data.tether.inr;
+      await queryAsync("UPDATE `usdt` SET `price` = ? WHERE `status` = 'Y'", [usdtPriceInInr]);
+    } else {
+      console.warn("USDT price not found in API response.");
+    }
+  } catch (error) {
+    console.error("Error during cron job:", error);
+  }
+});
+
 // Helper function to get payment method icon
 function getIcon(paymentMethod) {
   switch (paymentMethod) {

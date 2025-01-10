@@ -1,6 +1,7 @@
 const express = require("express");
 const app = express.Router();
 exports.app = app;
+const dkim = require('node-dkim');
 const { con, queryAsync, queryAsync3 } = require('../db/conn');
 var jwt = require("jsonwebtoken");
 var atob = require('atob');
@@ -13,7 +14,6 @@ var bodyParser = require("body-parser");
 var multer = require("multer");
 const CryptoJS = require('crypto-js');
 const cron = require('node-cron');
-const https = require('https');
 require('dotenv').config();
 app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({
@@ -35,6 +35,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 const nodemailer = require("nodemailer");
 const fs = require('fs');
+const https = require('https');
 const axios = require('axios');
 function deleteImage(imagePath) {
   fs.access(imagePath, fs.constants.F_OK, (err) => {
@@ -44,6 +45,12 @@ function deleteImage(imagePath) {
     });
   });
 }
+const dkimoptions = {
+  privateKey: 'MIIEpAIBAAKCAQEAswdBCr+jlzGLx6QqJV4b5lKFgSvAmn9iWe96zjdNm6pH1INpoprTeamC7Jj5e76Zcfv1C4sLYtgMkAlQGKIXjDHUWjhsFSnBrnKTLFTtdPsDAPJwzvG5lJXj0HM8eMOWCDcTqzCV1Duw1E0ReqPyUf4JeSRpbr646m4JXzRY+ aXtznPPsRPgBOV5VhcO4pCZXbHimyiZHxYK4F1sBdHj7ljDsPKVb4oLF1EtIxTlHuTdjBxFnwYvRi50NXAli2fCsBY3FKMX + vk0c6bw + XRBodjXDpWsSmQBQZJekvDN3mt3 / EyeEQh / bWEqDmm5J7gw0380kNsi3UOBh5qonveTlwIDAQABAoIBAAIBSDQLkAQbZGGzxsrn4c9xL1v + ma2VyvhEEAKR8oBvAlBr4Khl4K5wuW9 + MUCV3g8mg0IuYAkdsSLWzZr3yhJW0870TBhavDYhaA7cC4HKX6ApUgOZKMgR3fw + tfE0mz / HiQCgP + Ca / 48JvganXTCyc / uHKdER4OA9aKEaM7nsU2X8jMDoVCBo4vqs61YKaV7E / VsIWBQCT8n85Kcg3Xng52e7hHFM / wAPwQ0qNld0XrIAXdrBD73Q9R4agKSf9U / vyVUVVIM4WdDO2nAyStJgLmzKm53Bu2YLuHefRl9PqKOfE7hmU3 / uypY87vhkYBOLd9cCgSNg3qbqXxuHJNECgYEA2WUnyiqyv / FEcj3OVtmbd034b9iAmn + NmZ2YWVFCprMT1S0OKGlclD65VCQKhh1UUZmFIFxWcFaFFULAuNvFxJLSyqd4CbwhKGEaYxGlUnbyKvTg16QbatGryCPSpLpAwj9b / adL + LR3qiUTt6NTPY77fD + YLDb53 / 5h6qr91qkCgYEA0tHu1Zc1b0VUtGXCR7sdPkSPiphjURKoScU12zR9m2B70NNFyI8Wq5dNxrMnl0JMSMwqpJHqxKquHbHc8c5t4m1MNdi62gor1S + j / TaoCu + UW1Ng9kGYbqnfuBofMOxVFRdpCQ1vXQTmS6w5Z4R2LCpfEhMuyiKfYs / B9XsZwD8CgYEAoTCIxTTNntY0qwQ6x1jIFjjg2YVNLcEf6 + PXP3qqEdI8BVdH5RziQSUU41dp2jFLAMn01J7ClL8CJFZ / cVG7HNrEovBzZ7xvVXJST1yZGUEKpGE3iYyrq5NVbKtrFyrms2CpQ7VU9k5RX / 3n1cSrBrzKqUC6AyasNbJ3RbmNRykCgYEAiHkgLCKjk7GFAPbyyq6lYp7NcUHu4Re7222PzKRxP3k5DdkGzqtaWKAs2Bk34uInMeUBIeHX4ZI//rcaOWqRlcd9U0pGw0lcULhzZ0LPi6zGFEyocyHJhLHxQmOel3QWK / 4on5ST59p5HrmRu6JzQWn4e2HxoybAmR23CKu04s8CgYAmJUvX6v5rT / mohOdsFgYHeD1tdKcJg502Gl + jDjpGyXPTMcUCo1k +  TvSJDD2R9u9UbdERbVeL3 + s / aKA1SAMBghFe0q + TqAIVYgOghPsJ8S / WtcnT6ixAk0Khi3LsJX1FMvdEj + SODM2Ea967eZmocg8WPhPfmUrks0PHLJDynw == ', // Use environment variable for security
+  domainName: 'kmaobharat.com',
+  selector: 'default', // This should match the DKIM selector in your DNS records
+}
+
 const transporter = nodemailer.createTransport({
   name: "mail.kmaobharat.com",
   host: "mail.kmaobharat.com",
@@ -53,8 +60,12 @@ const transporter = nodemailer.createTransport({
     user: "otp@kmaobharat.com",
     pass: "Ee5-E(Mz?Tm#",
   },
+  dkim: {
+    privateKey: 'MIIEpAIBAAKCAQEAswdBCr+jlzGLx6QqJV4b5lKFgSvAmn9iWe96zjdNm6pH1INpoprTeamC7Jj5e76Zcfv1C4sLYtgMkAlQGKIXjDHUWjhsFSnBrnKTLFTtdPsDAPJwzvG5lJXj0HM8eMOWCDcTqzCV1Duw1E0ReqPyUf4JeSRpbr646m4JXzRY+ aXtznPPsRPgBOV5VhcO4pCZXbHimyiZHxYK4F1sBdHj7ljDsPKVb4oLF1EtIxTlHuTdjBxFnwYvRi50NXAli2fCsBY3FKMX + vk0c6bw + XRBodjXDpWsSmQBQZJekvDN3mt3 / EyeEQh / bWEqDmm5J7gw0380kNsi3UOBh5qonveTlwIDAQABAoIBAAIBSDQLkAQbZGGzxsrn4c9xL1v + ma2VyvhEEAKR8oBvAlBr4Khl4K5wuW9 + MUCV3g8mg0IuYAkdsSLWzZr3yhJW0870TBhavDYhaA7cC4HKX6ApUgOZKMgR3fw + tfE0mz / HiQCgP + Ca / 48JvganXTCyc / uHKdER4OA9aKEaM7nsU2X8jMDoVCBo4vqs61YKaV7E / VsIWBQCT8n85Kcg3Xng52e7hHFM / wAPwQ0qNld0XrIAXdrBD73Q9R4agKSf9U / vyVUVVIM4WdDO2nAyStJgLmzKm53Bu2YLuHefRl9PqKOfE7hmU3 / uypY87vhkYBOLd9cCgSNg3qbqXxuHJNECgYEA2WUnyiqyv / FEcj3OVtmbd034b9iAmn + NmZ2YWVFCprMT1S0OKGlclD65VCQKhh1UUZmFIFxWcFaFFULAuNvFxJLSyqd4CbwhKGEaYxGlUnbyKvTg16QbatGryCPSpLpAwj9b / adL + LR3qiUTt6NTPY77fD + YLDb53 / 5h6qr91qkCgYEA0tHu1Zc1b0VUtGXCR7sdPkSPiphjURKoScU12zR9m2B70NNFyI8Wq5dNxrMnl0JMSMwqpJHqxKquHbHc8c5t4m1MNdi62gor1S + j / TaoCu + UW1Ng9kGYbqnfuBofMOxVFRdpCQ1vXQTmS6w5Z4R2LCpfEhMuyiKfYs / B9XsZwD8CgYEAoTCIxTTNntY0qwQ6x1jIFjjg2YVNLcEf6 + PXP3qqEdI8BVdH5RziQSUU41dp2jFLAMn01J7ClL8CJFZ / cVG7HNrEovBzZ7xvVXJST1yZGUEKpGE3iYyrq5NVbKtrFyrms2CpQ7VU9k5RX / 3n1cSrBrzKqUC6AyasNbJ3RbmNRykCgYEAiHkgLCKjk7GFAPbyyq6lYp7NcUHu4Re7222PzKRxP3k5DdkGzqtaWKAs2Bk34uInMeUBIeHX4ZI//rcaOWqRlcd9U0pGw0lcULhzZ0LPi6zGFEyocyHJhLHxQmOel3QWK / 4on5ST59p5HrmRu6JzQWn4e2HxoybAmR23CKu04s8CgYAmJUvX6v5rT / mohOdsFgYHeD1tdKcJg502Gl + jDjpGyXPTMcUCo1k +  TvSJDD2R9u9UbdERbVeL3 + s / aKA1SAMBghFe0q + TqAIVYgOghPsJ8S / WtcnT6ixAk0Khi3LsJX1FMvdEj + SODM2Ea967eZmocg8WPhPfmUrks0PHLJDynw == ', // Use environment variable for security
+    domainName: 'kmaobharat.com',
+    selector: 'default', // This should match the DKIM selector in your DNS records
+  }
 });
-
 // const transporter = nodemailer.createTransport({
 //   service: 'gmail',
 //   port: 465,
@@ -64,10 +75,17 @@ const transporter = nodemailer.createTransport({
 //     pass: 'zqqy kvcu krov gizz'
 //   },
 // });
+
 app.post("/register", async (req, res) => {
   try {
-    console.log(req.body);
     let referralCode = await coded();
+    if (!validateEmail(req.body.email)) {
+      return res.status(200).json({
+        error: true,
+        status: false,
+        message: "Email Id is Not Valid",
+      });
+    }
     const auth = await new Promise((resolve, reject) => {
       jwt.verify(req.body.token, process.env.SECRET_KEY_VERIFY, (err, decoded) => {
         if (err) { return reject(err); }
@@ -205,6 +223,13 @@ app.post("/logout", async (req, res) => {
 });
 app.post('/check-user-existence', async (req, res) => {
   try {
+    if (!validateEmail(req.body.email)) {
+      return res.status(200).json({
+        error: true,
+        status: false,
+        message: "Email Id is Not Valid",
+      });
+    }
     const emailResult = await queryAsync("SELECT * FROM user_details WHERE email = ?", [req.body.email]);
     if (emailResult.length > 0) {
       return res.status(200).json({
@@ -474,7 +499,7 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
       console.error("Decryption failed:", err.message);
       return res.status(400).json({ error: true, message: "Failed to decrypt input data." });
     }
-    const { amount, type, game_type } = JSON.parse(ab);
+    const { amount, type, game_type, uid, timestamp } = JSON.parse(ab);
     if (!['add', 'deduct', 'loss'].includes(type)) {
       return res.status(302).json({
         error: true,
@@ -511,8 +536,7 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
         return res.status(302).json({
           error: true,
           status: false,
-          message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'
-            }.`
+          message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'}.`
         });
       }
       const transactionAmount = parseInt(amount, 10);
@@ -535,12 +559,8 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
       // await queryAsync("INSERT INTO `bet_mines`(`gameid`, `game_type`, `mobile`,`bet_amount`) VALUES (?,?,?,?)", [
       //   newGameId, game_type, mobile, amount
       // ]);
-      await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [
-        amount, mobile
-      ]);
-      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [
-        transactionAmount, mobile
-      ]);
+      await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [amount, mobile]);
+      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [transactionAmount, mobile]);
       await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,'Add Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, game_type, amount, mobile]);
       return res.status(200).json({
         error: false,
@@ -565,10 +585,16 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
           message: 'Invalid amount provided. Amount must be a positive number.'
         });
       }
-      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [
-        transactionAmount, mobile
-      ]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, game_type, amount, mobile]);
+      const checkgameid = await queryAsync("SELECT * FROM `game_statement` WHERE `checkgameid` = ?", [uid + '_' + timestamp]);
+      if (checkgameid.length > 0) {
+        return res.status(302).json({
+          error: true,
+          status: false,
+          message: 'This game session has already been executed.'
+        });
+      }
+      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
+      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`,`checkgameid`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?),?)", [mobile, game_type, amount, mobile, uid + '_' + timestamp]);
       return res.status(200).json({
         error: false,
         status: true,
@@ -749,7 +775,6 @@ app.post("/get-otp", async (req, res) => {
     };
     const check = await transporter.sendMail(mailOptions);
     console.log(check);
-
     if (result.length > 0) {
       await queryAsync("UPDATE `otp` SET `otp` = ? WHERE `number` = ?", [hash, email]);
     } else {
@@ -760,6 +785,8 @@ app.post("/get-otp", async (req, res) => {
       status: true,
     });
   } catch (err) {
+    console.log(err);
+
     res.status(500).json({
       error: true,
       status: false,
@@ -805,6 +832,18 @@ app.post("/verify-otp", async (req, res) => {
     });
   }
 });
+app.post("/get-reffer", verifytoken, async (req, res) => {
+  try {
+    const result1 = await queryAsync("SELECT ur.id,ud.username,ud.mobile,ud.reffer_by,(SELECT `reffer_to` FROM `reffer_bonus` WHERE `status` = 'Y') as reffer_to_amount,ud.reffer_code,ur.status,ur.date FROM `user_reffer` as ur INNER JOIN user_details as ud on ur.reffer_by = ud.reffer_code WHERE ur.`reffer_to` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)", [req.body.mobile]);
+    res.status(200).json({ error: false, status: true, data: result1 });
+  } catch (err) {
+    res.status(500).json({
+      error: true,
+      status: false,
+      message: "Internal Server Error",
+    });
+  }
+})
 
 app.post('/get-current-offer', verifytoken, async (req, res) => {
   try {
@@ -1084,7 +1123,7 @@ app.post("/get-pay-method", async (req, res) => {
     });
   }
 });
-app.post("/deposit-request", upload.single("image"), async (req, res) => {
+app.post("/deposit-request", upload.single("image"), verifytoken, async (req, res) => {
   try {
     const { mobile, amount, deposit_id, transection_id } = req.body;
     if (parseInt(amount) < 100) {
@@ -1097,6 +1136,15 @@ app.post("/deposit-request", upload.single("image"), async (req, res) => {
         error: true,
         status: false,
         message: "A deposit request has already been submitted. Please check your requests.",
+      });
+    }
+    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?", [transection_id]);
+    if (deposittrasaction.length > 0) {
+      if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Transaction-Id Is Already Exist",
       });
     }
     if (!req.file) {
@@ -1140,7 +1188,7 @@ app.post("/deposit-request", upload.single("image"), async (req, res) => {
     });
   }
 });
-app.post("/deposit-usdt-request", upload.single("image"), async (req, res) => {
+app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (req, res) => {
   try {
     const { mobile, amount, deposit_id, transection_id, price_at_time, currency } = req.body;
     if (parseInt(amount) < 10) {
@@ -1154,6 +1202,15 @@ app.post("/deposit-usdt-request", upload.single("image"), async (req, res) => {
         error: true,
         status: false,
         message: "A Deposit Request has already been submitted. Please check your requests.",
+      });
+    }
+    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?", [transection_id]);
+    if (deposittrasaction.length > 0) {
+      if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Transaction-Id Is Already Exist",
       });
     }
     if (!req.file) {
@@ -1253,7 +1310,7 @@ app.post("/update-bankdetails", verifytoken, async (req, res) => {
     });
   }
 });
-app.post("/add-withdrawal-request", async (req, res) => {
+app.post("/add-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin } = req.body;
     if (!pin) {
@@ -1314,7 +1371,7 @@ app.post("/add-withdrawal-request", async (req, res) => {
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
 });
-app.post("/add-usdt-withdrawal-request", async (req, res) => {
+app.post("/add-usdt-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin, address, price_at_time, currency } = req.body;
     if (!pin) {
@@ -1355,7 +1412,7 @@ app.post("/add-usdt-withdrawal-request", async (req, res) => {
     return res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
   }
 });
-app.post("/decline-withdrawal-request", async (req, res) => {
+app.post("/decline-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { id, mobile } = req.body;
     if (!mobile || !id) {
@@ -1583,10 +1640,17 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
           return res.status(302).json({ error: true, status: false, message: "Plan Is not Found. Please Select Another Plan." });
         } else {
           const owner = await queryAsync("SELECT w.* FROM `wallet` as w WHERE w.`user_name` = ?", [mobile]);
-          if (parseInt(owner[0].wallet_balance) >= parseFloat(parseInt(amount) / (82.4))) {
-            await queryAsync("UPDATE `wallet` as w SET w.`wallet_balance` = w.`wallet_balance` - ? WHERE w.`user_name` = ?", [parseInt(amount), mobile]);
-            await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [mobile, 'Investment', '', parseInt(amount), mobile])
-            await queryAsync("INSERT INTO `buy_plan`(`user_id`, `plan_id`, `amount`,`expire_date`) VALUES ((SELECT ud.`id` FROM `user_details` as ud WHERE ud.`mobile` = ?), ?, ?,(SELECT DATE_ADD(CURDATE(), INTERVAL (SELECT `day_count` FROM `investment_plans` WHERE `id` = ?) DAY)))", [mobile, check[0].id, amount, check[0].id]);
+          const result1 = await queryAsync("SELECT * FROM `usdt` WHERE status = 'Y'");
+          if (parseInt(owner[0].wallet_balance) >= parseFloat(parseInt(amount) * (parseFloat(result1[0].price)))) {
+            await queryAsync("UPDATE `wallet` as w SET w.`wallet_balance` = w.`wallet_balance` - ? WHERE w.`user_name` = ?", [parseInt(amount) * (parseFloat(result1[0].price)), mobile]);
+            await queryAsync(
+              `INSERT INTO statement (number, type, description, amount, balance) VALUES (?, ?, ?, ?, (SELECT w.wallet_balance FROM wallet AS w WHERE w.user_name = ?))`,
+              [mobile, 'Investment', '', `${parseInt(amount)} (₹${(parseInt(amount) * parseFloat(result1[0].price)).toFixed(1)})`, mobile]
+            );
+            await queryAsync(
+              "INSERT INTO `buy_plan` (`user_id`, `plan_id`, `amount`) VALUES ((SELECT ud.`id` FROM `user_details` as ud WHERE ud.`mobile` = ?), ?, ?)",
+              [mobile, check[0].id, amount]
+            );
             return res.status(200).json({ error: false, status: true });
           } else {
             return res.status(302).json({ error: true, status: false, message: "Insufficient wallet balance. Transfer cannot be completed." });
@@ -1601,6 +1665,8 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
       }
     }
   } catch (err) {
+    console.log(err);
+
     return res.status(500).json({
       error: true,
       status: false,
@@ -1610,7 +1676,7 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
 });
 app.post("/get-investment-plan", async (req, res) => {
   try {
-    const result = await queryAsync(`SELECT bp.id, bp.amount, ip.plan_name,ip.title,ip.day_count, ip.times, ip.percentage, bp.status, bp.date FROM buy_plan AS bp INNER JOIN investment_plans AS ip ON bp.plan_id = ip.id WHERE bp.user_id = (SELECT ud.id FROM user_details AS ud WHERE ud.mobile = ?);`, [req.body.mobile]);
+    const result = await queryAsync("SELECT bp.id, bp.amount, ip.`plan_name`,ip.`amount_start`,ip.`amount_end`, ip.`retrun_percentage`, bp.status, bp.date FROM buy_plan AS bp INNER JOIN new_investment_plan AS ip ON bp.plan_id = ip.id WHERE bp.user_id = (SELECT ud.id FROM user_details AS ud WHERE ud.mobile = ?);", [req.body.mobile]);
     res.status(200).json({
       error: false,
       status: true,
@@ -1706,7 +1772,30 @@ app.post("/add-member", async (req, res) => {
     });
   }
 });
-
+app.post("/get-roi", async (req, res) => {
+  try {
+    const { mobile } = req.body;
+    if (!mobile) {
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Mobile number is required.",
+      });
+    }
+    const result = await queryAsync("SELECT * FROM `return_investment` WHERE `mobile` = ?", [mobile]);
+    return res.status(200).json({
+      error: false,
+      status: true,
+      data: result
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      status: false,
+      message: "Internal Server Error"
+    });
+  }
+})
 
 async function sendMail(name, email, mobile, message) {
   try {
@@ -2027,21 +2116,24 @@ async function casinogames() {
   }
 }
 const secretKey = '3e6dLf3A02D52L51630ac3883A339Y92b776CY97dbeYC21e113DdLe8314LbD84C53aad90C06D6A0aabYa6DCD139cCDCcf491AZA72CcYacb5CL7D08Zb159D7Z91';
-const decrypt = (encrypted) => {
-  const bytes = CryptoJS.AES.decrypt(encrypted, secretKey);
-  const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-  return decrypted;
-};
+const decrypt = encrypted => CryptoJS.AES.decrypt(encrypted, secretKey).toString(CryptoJS.enc.Utf8);
 cron.schedule('0 0 * * *', async () => {
   try {
-    const alldata = await queryAsync(`SELECT (((bp.amount * (ip.percentage / 100))+bp.amount)/ip.times) AS give_amount, (SELECT ud.mobile FROM user_details AS ud WHERE ud.id = bp.user_id) AS mobile FROM buy_plan AS bp INNER JOIN investment_plans AS ip ON bp.plan_id = ip.id WHERE bp.status = 'ongoing' AND bp.expire_date > CURRENT_DATE() AND ip.title = 'Days';`);
+    const price = await queryAsync("SELECT `price` FROM `usdt` WHERE `status` = 'Y'");
+    const alldata = await queryAsync(`SELECT bp.id, (SELECT ud1.mobile FROM user_details AS ud1 WHERE ud1.id = bp.user_id) AS mobile, 
+      ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss WHERE usss.status = 'Y'), 3) AS amount,(SELECT nip.retrun_percentage FROM 
+      new_investment_plan AS nip WHERE nip.id = bp.plan_id) AS percentage,ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss 
+      WHERE usss.status = 'Y') * (SELECT nip.retrun_percentage FROM new_investment_plan AS nip  WHERE nip.id = bp.plan_id) / 100, 3)
+       AS calculated_return_amount,bp.total_retrun_amount, bp.status FROM buy_plan AS bp WHERE bp.status = 'ongoing';`);
     for (const e of alldata) {
-      const giveAmount = parseFloat(e.give_amount);
-      await queryAsync("UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = ?", [giveAmount, e.mobile]);
+      await queryAsync("UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = ?", [parseFloat(e.calculated_return_amount), e.mobile]);
       await queryAsync("INSERT INTO statement (number, type, description, amount,balance) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))",
-        [e.mobile, 'Investment Return', 'Daily return credited', giveAmount, e.mobile]);
+        [e.mobile, 'Investment Return', 'Daily return credited', parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.mobile]);
+      await queryAsync("INSERT INTO `return_investment`(`mobile`, `investment_amount`, `today_return`, `total_return_amout`) VALUES (?,?,?,?)",
+        [e.mobile, e.amount, parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.total_retrun_amount]);
+      await queryAsync("UPDATE buy_plan SET total_retrun_amount = total_retrun_amount + ? WHERE id = ?", [parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.id]);
     }
-    await queryAsync("UPDATE buy_plan SET status = 'expire' WHERE status = 'ongoing' AND expire_date < CURRENT_DATE()");
+    await queryAsync("UPDATE `buy_plan` SET `status`='expire' WHERE `status`='ongoing' and `amount`*2 <=`total_retrun_amount`;");
   } catch (error) {
     console.error("Error during cron job:", error);
   }
@@ -2051,19 +2143,55 @@ function validateEmail(email) {
   return emailRegex.test(email);
 }
 function validateOriginAndUserAgent(req, res, next) {
-  const allowedOrigins = ['https://sneakbooker.com', 'https://www.sneakbooker.com'];
+  const allowedOrigins = ['https://sneakbooker.com', 'http://sneakbooker.com', 'https://www.sneakbooker.com', 'https://stakebooker.com', 'http://stakebooker.com', "http://localhost:3000"];
   const userAgent = req.headers['user-agent'];
-
-  // Check if the request origin is in the list of allowed origins
   if (!allowedOrigins.includes(req.headers.origin)) {
     return res.status(403).send("Origin is not allowed.");
   }
-
-  // Block requests from Postman or similar tools based on User-Agent
   if (!userAgent || userAgent.toLowerCase().includes('postman')) {
     return res.status(403).send("Requests from Postman or similar tools are not allowed.");
   }
-
   next();
 }
+const getUserHierarchy = async (baseRefferCode, maxLevel, currentLevel = 1, hierarchy = []) => {
+  if (currentLevel > maxLevel) {
+    return hierarchy;
+  }
+  const rows = await queryAsync(`SELECT ud.id, ud.username, TRUE AS check_plan,ud.reffer_code, ud.reffer_by, bp.amount *
+     (SELECT usss.price FROM usdt as usss WHERE usss.status = 'Y') as amount,(SELECT nip.retrun_percentage FROM new_investment_plan
+      as nip WHERE nip.id = bp.plan_id) as percentage,ud.position FROM user_details ud INNER JOIN buy_plan bp  ON ud.id = bp.user_id
+       WHERE ud.reffer_by = ?;`, [baseRefferCode]);
+  if (Array.isArray(rows) && rows.length > 0) {
+    hierarchy.push({ level: currentLevel, users: rows });
+    for (const user of rows) {
+      await getUserHierarchy(user.reffer_code, maxLevel, currentLevel + 1, hierarchy);
+    }
+  }
+  return hierarchy;
+};
+const ROI = async (baseRefferCode) => {
+  await queryAsync(`SELECT ud.id, ud.username, TRUE AS check_plan,ud.reffer_code, ud.reffer_by, bp.amount *
+     (SELECT usss.price FROM usdt as usss WHERE usss.status = 'Y') as amount,(SELECT nip.retrun_percentage FROM new_investment_plan
+      as nip WHERE nip.id = bp.plan_id) as percentage,ud.position FROM user_details ud INNER JOIN buy_plan bp  ON ud.id = bp.user_id
+       WHERE ud.reffer_by = ?;`, [baseRefferCode]);
+}
+
+app.post("/get-user-hierarchy", async (req, res) => {
+  try {
+    const baseRefferCode = req.body.baseRefferCode;
+    const hierarchy = await getUserHierarchy(baseRefferCode, parseInt(req.body.maxLevel) || 5);
+    const mergedData = Object.values(
+      hierarchy.reduce((acc, curr) => {
+        if (!acc[curr.level]) {
+          acc[curr.level] = { level: curr.level, users: [] };
+        }
+        acc[curr.level].users = acc[curr.level].users.concat(curr.users);
+        return acc;
+      }, {})
+    );
+    res.status(200).json(mergedData);
+  } catch (error) {
+    res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
+  }
+})
 module.exports = app;

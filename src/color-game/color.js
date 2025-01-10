@@ -143,7 +143,7 @@ app.post("/get-bet-record", verifytoken, async (req, res) => {
         const limit = 10;
         const offset = limit * req.body.page - limit;
         const result = await queryAsync3(
-            "SELECT bt.id, bt.Period, bt.`game-type`, bt.price, bt.type, bt.value, bt.if_open_zero, (SELECT gc.CODE FROM `game_color` as gc WHERE gc.name = bt.value) AS color, (SELECT COUNT(*) FROM `bet-table` WHERE `username` = ? AND `game-type` = ?) AS count, bt.open_color, bt.open_number as number, bt.winning_amount, bt.date FROM `bet-table` as bt WHERE bt.`username` = ? and bt.`game-type` = ? ORDER BY bt.id DESC LIMIT ? OFFSET ?;",
+            "SELECT bt.id, bt.Period, bt.`game-type`, bt.price, bt.type, bt.value, bt.if_open_zero, (SELECT gc.CODE FROM `game_color` as gc WHERE gc.name = bt.value) AS color, (SELECT COUNT(*) FROM `bet-table` WHERE `username` = ? AND `game-type` = ?) AS count, bt.open_color, bt.open_number as number, bt.`winning-amount` as winning_amount, bt.date FROM `bet-table` as bt WHERE bt.`username` = ? and bt.`game-type` = ? ORDER BY bt.id DESC LIMIT ? OFFSET ?;",
             [req.body.mobile, req.body.id, req.body.mobile, req.body.id, limit, offset]
         );
         res.status(200).json(btoa(JSON.stringify({ error: false, status: true, data: result })));
@@ -415,7 +415,7 @@ async function updateRecordAndCallProcedures(ran, period, game_type, number) {
     await winnerWalletNumber(period, game_type, number);
     const color = getColor(number);
     await winnerWalletColor(period, game_type, number, color);
-    await queryAsync3("UPDATE `bet-table` SET `open_color`=? ,`open_number`= ?,`winning_amount`=? WHERE `Period` = ? and `game-type` = ?", [color, number, ran, period, game_type]);
+    await queryAsync3("UPDATE `bet-table` SET `open_color`=? ,`open_number`= ? WHERE `Period` = ? and `game-type` = ?", [color, number,period, game_type]);
     // await queryAsync('CALL winnerwalletcolor(?, ?, ?, ?)', [period, game_type, number, color]);
 }
 const winnerWalletNumber = async (period, gameType, num) => {
