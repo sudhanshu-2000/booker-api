@@ -832,19 +832,12 @@ app.post("/get-deposit-request", verifytoken, async (req, res) => {
 //   }
 // })
 app.post('/approve-deposit-request', verifytoken, async (req, res) => {
-  const schema = Joi.object({
-    id: Joi.number().required(),
-    username: Joi.string().alphanum().required(),
-    mobile: Joi.string().regex(/^[0-9]{10}$/).required(),
-  });
-
+  const schema = Joi.object({ id: Joi.number().required(), username: Joi.string().alphanum().required(), mobile: Joi.string().regex(/^[0-9]{10}$/).required() });
   const { error } = schema.validate(req.body);
   if (error) {
     return res.status(400).json({ error: true, message: error.details[0].message });
   }
-
   const { id, username, mobile } = req.body;
-
   try {
     await queryAsync("START TRANSACTION");
     const deposit = await queryAsync("SELECT * FROM `deposit` WHERE `id` = ?", [id]);
@@ -898,10 +891,7 @@ app.post('/approve-deposit-request', verifytoken, async (req, res) => {
         );
       }
     }
-    const walletUpdateAmount =
-      deposit[0].payment_type === "USDT"
-        ? deposit[0].balance * deposit[0].price_at_that_time
-        : deposit[0].balance;
+    const walletUpdateAmount = deposit[0].payment_type === "USDT" ? deposit[0].balance * deposit[0].price_at_that_time : deposit[0].balance;
 
     await queryAsync(
       "UPDATE `wallet` SET `wallet_balance` = wallet_balance + ? WHERE `user_name` = ?",
@@ -1534,64 +1524,6 @@ app.post("/del-reffer", verifytoken, async (req, res) => {
   }
 });
 
-const agent = async (amount, user) => {
-  const percentage2 = ((5 / 100) * parseFloat(amount)).toFixed(2);
-  const percentage3 = ((3 / 100) * parseFloat(amount)).toFixed(2);
-  const percentage4 = ((2 / 100) * parseFloat(amount)).toFixed(2);
-  const percentage5 = ((2 / 100) * parseFloat(amount)).toFixed(2);
-  const percentage6 = ((1 / 100) * parseFloat(amount)).toFixed(2);
-  const percentage7 = ((1 / 100) * parseFloat(amount)).toFixed(2);
-  try {
-    const result = await queryAsync("SELECT `reffer_code` as rc FROM `user_details` WHERE `user_name` = ?", [user]);
-    if (result.length > 0) {
-      const level1 = await queryAsync("SELECT * FROM `user_level` WHERE `user_reffral` = ?", [result[0].rc]);
-      if (level1[0].level_1) {
-        await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage2, level1[0].level_1]);
-        await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, percentage2, 'Level 1']);
-        if (level1[0].level_2 != null) {
-          await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage3, level1[0].level_2]);
-          await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_2, percentage3, 'Level 2']);
-          if (level1[0].level_3 != null) {
-            await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage4, level1[0].level_3]);
-            await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_3, percentage4, 'Level 3']);
-            if (level1[0].level_4 != null) {
-              await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage5, level1[0].level_4]);
-              await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_4, percentage5, 'Level 4']);
-              if (level1[0].level_5 != null) {
-                await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage6, level1[0].level_5]);
-                await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_5, percentage6, 'Level 5']);
-                if (level1[0].level_6 != null) {
-                  await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [percentage7, level1[0].level_6]);
-                  await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_6, percentage7, 'Level 6']);
-                } else {
-                  await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage7).toFixed(2), level1[0].level_1]);
-                  await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage7).toFixed(2), 'Level 1']);
-                }
-              } else {
-                await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage6).toFixed(2), level1[0].level_1]);
-                await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage6).toFixed(2), 'Level 1']);
-              }
-            } else {
-              await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage5).toFixed(2), level1[0].level_1]);
-              await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage5).toFixed(2), 'Level 1']);
-            }
-          } else {
-            await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage4).toFixed(2), level1[0].level_1]);
-            await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage4).toFixed(2), 'Level 1']);
-          }
-        } else {
-          await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage3).toFixed(2), level1[0].level_1]);
-          await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage3).toFixed(2), 'Level 1']);
-        }
-      } else {
-        await queryAsync("UPDATE `wallet` SET `agents_wallet` = `agents_wallet` + ? WHERE `user_name` = (SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?)", [((parseFloat(amount)) - percentage2).toFixed(2), level1[0].level_1]);
-        await queryAsync("INSERT INTO `agents_statement`(`mobile`, `amount`, `discription`) VALUES ((SELECT `user_name` FROM `user_details` WHERE `reffer_code` = ?), ?, ?)", [level1[0].level_1, ((parseFloat(amount)) - percentage2).toFixed(2), 'Level 1']);
-      }
-    }
-  } catch (error) {
-    console.error(error);
-  }
-};
 function deleteImage(imagePath) {
   fs.access(imagePath, fs.constants.F_OK, (err) => {
     if (err) { return; }

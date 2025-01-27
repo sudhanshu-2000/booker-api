@@ -128,7 +128,7 @@ app.post("/register", async (req, res) => {
       "INSERT INTO `user_details`(`mobile`, `username`, `password`, `email`, `uid`, `reffer_by`, `reffer_code`, `position`) VALUES (?,?,?,?,?,?,?,?)",
       [req.body.mobile, req.body.name, hashedPassword, req.body.email, newId, req.body.reffer_by || '5Zw8gbwv', referralCode, req.body.position || "L"]
     );
-    await queryAsync('INSERT INTO `user_reffer`(`reffer_to`, `reffer_by`) VALUES (?,?)', [req.body.reffer_by || '5Zw8gbwv', referralCode]);
+    await queryAsync('INSERT INTO `user_reffer`(`reffer_to`, `reffer_by`, `position`) VALUES (?,?,?)', [req.body.reffer_by || '5Zw8gbwv', referralCode, req.body.position || "L"]);
     await queryAsync('INSERT INTO `wallet`(`user_name`) VALUES(?)', [req.body.mobile]);
     return res.status(200).json({
       error: false,
@@ -514,23 +514,6 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
         message: `Missing required field Mobile `
       });
     }
-    // if (type == 'loss') {
-    //   if (!game_id) {
-    //     return res.status(302).json({
-    //       error: true,
-    //       status: false,
-    //       message: `Missing required field Game Id.`
-    //     });
-    //   }
-    //   await queryAsync("UPDATE `bet_mines` SET `status`='L' WHERE `gameid` = ? AND `mobile` = ?", [
-    //     game_id, mobile
-    //   ]);
-    //   return res.status(200).json({
-    //     error: true,
-    //     status: false,
-    //     message: 'Result declared Successfully.'
-    //   });
-    // }
     if (type === 'deduct') {
       if (!amount || !type || !game_type) {
         return res.status(302).json({
@@ -548,20 +531,15 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
         });
       }
       const [user] = await queryAsync("SELECT game_wallet FROM `wallet` WHERE `user_name` = ?", [mobile]);
-      // const [game] = await queryAsync("SELECT MAX(gameid) AS max_gameid FROM bet_mines;");
       if (!user) {
         return res.status(302).json({ error: true, status: false, message: 'User not found.' });
       }
-      if (user.wallet_balance < transactionAmount) {
+      if (user.game_wallet < transactionAmount) {
         return res.status(302).json({ error: true, status: false, message: 'Insufficient balance.' });
       }
-      // const newGameId = parseInt(game.max_gameid, 10) + 1 || 2024000000;
-      // await queryAsync("INSERT INTO `bet_mines`(`gameid`, `game_type`, `mobile`,`bet_amount`) VALUES (?,?,?,?)", [
-      //   newGameId, game_type, mobile, amount
-      // ]);
       await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [amount, mobile]);
       await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,'Add Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, game_type, amount, mobile]);
+      await queryAsync(`INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance) VALUES (?,'Add Bet',?,?,(SELECT (game_wallet) as balance FROM wallet WHERE user_name= ?))`, [mobile, game_type, amount, mobile]);
       return res.status(200).json({
         error: false,
         status: true,
@@ -598,19 +576,8 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
       return res.status(200).json({
         error: false,
         status: true,
-        message: 'Wallet balance successfully added.'
+        message: 'Wallet Balance SuccessFully Added.'
       });
-      // if (userdata.status === 'P') {
-      //   await queryAsync("UPDATE `bet_mines` SET `status`='W',`multiple`=? WHERE `gameid` = ? AND `mobile` = ?", [
-      //     parseFloat((amount / userdata.bet_amount).toFixed(2)), game_id, mobile
-      //   ]);
-      // } else {
-      //   return res.status(302).json({
-      //     error: true,
-      //     status: false,
-      //     message: 'Result already declared.'
-      //   });
-      // }
     }
   } catch (err) {
     console.log(err);
@@ -774,7 +741,6 @@ app.post("/get-otp", async (req, res) => {
       html: `Your OTP is <b>${val.toString()}</b>, valid for 10 min`,
     };
     const check = await transporter.sendMail(mailOptions);
-    console.log(check);
     if (result.length > 0) {
       await queryAsync("UPDATE `otp` SET `otp` = ? WHERE `number` = ?", [hash, email]);
     } else {
@@ -1601,12 +1567,19 @@ app.post("/get-plans", async (req, res) => {
 })
 app.post("/get-statement", verifytoken, async (req, res) => {
   try {
+    if (!req.body.mobile) {
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Invalid or missing 'Mobile' parameter"
+      });
+    }
     const result = await queryAsync("SELECT * FROM `statement` where `number`=?", [req.body.mobile]);
-    res.status(200).json({
-      error: false,
-      status: true,
-      data: result
-    });
+    res.status(200).json(
+      result.length
+        ? { error: false, status: true, data: result }
+        : { error: false, status: false, message: "No records found", data: [] }
+    );
   } catch (err) {
     res.status(500).json({
       error: true,
@@ -1615,6 +1588,51 @@ app.post("/get-statement", verifytoken, async (req, res) => {
     });
   }
 })
+app.post("/get-game-statement", verifytoken, async (req, res) => {
+  try {
+    if (!req.body.type) {
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Invalid or missing 'type' parameter"
+      });
+    }
+    const result = await queryAsync("SELECT * FROM `game_statement` WHERE `game_type` = ?", [req.body.type]);
+    res.status(200).json(
+      result.length ? { error: false, status: true, data: result } : { error: false, status: false, message: "No records found", data: [] }
+    );
+  } catch (err) {
+    console.error("Error in /get-game-statement:", err);
+    res.status(500).json({
+      error: true,
+      status: false,
+      message: "Internal Server Error"
+    });
+  }
+})
+app.post("/get-level-income", verifytoken, async (req, res) => {
+  try {
+    if (!req.body.mobile) {
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Invalid or missing 'mobile' parameter"
+      });
+    }
+    const result = await queryAsync("SELECT li.`id`, li.`mobile`, li.`level`, li.`position`, (SELECT ud.`username` FROM `user_details` as ud WHERE ud.`reffer_code` = li.`user_reffral`) as user_name, li.`retrun_amount`, li.`date` FROM `level_income` as li WHERE li.`mobile` = ?", [req.body.mobile]);
+    res.status(200).json(
+      result.length ? { error: false, status: true, data: result } : { error: false, status: false, message: "No records found", data: [] }
+    );
+  } catch (err) {
+    console.error("Error in /get-game-statement:", err);
+    res.status(500).json({
+      error: true,
+      status: false,
+      message: "Internal Server Error"
+    });
+  }
+})
+
 app.post("/make-new-investment", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin } = req.body;
@@ -1698,24 +1716,22 @@ app.post("/color-money-transfer", verifytoken, async (req, res) => {
     if (!bcrypt.compareSync(pin, check[0].pin)) return res.status(302).json({ error: true, status: false, message: "Incorrect PIN. Please enter the correct PIN." });
 
     const owner = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?", [mobile]);
-    const checkwallet = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?", [mobile]);
-    if (!checkwallet.length) await queryAsync("INSERT INTO `wallet`(`user_name`, `game_wallet`) VALUES (?,'0')", [mobile]);
+    if (!owner.length) await queryAsync("INSERT INTO `wallet`(`user_name`, `game_wallet`) VALUES (?,'0')", [mobile]);
     if (type == '1') {
-      if (parseInt(owner[0].wallet_balance) < parseInt(amount)) return res.status(302).json({ error: true, status: false, message: "Insufficient wallet balance." });
-      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` - ?, `game_wallet`=`game_wallet`+? WHERE `user_name` = ?", [parseInt(amount), parseInt(amount), mobile]);
+      if (parseFloat(owner[0].wallet_balance) < parseFloat(amount)) return res.status(302).json({ error: true, status: false, message: `Insufficient Balance in MainWallet.` });
+      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance`-?, `game_wallet`=`game_wallet`+? WHERE `user_name` = ?;", [parseInt(amount), parseInt(amount), mobile]);
       await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [mobile, 'Money Transfer', `Sent To GameWallet`, parseInt(amount), mobile]);
       await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, 'Money Transfer', `Received`, parseInt(amount), mobile]);
-      return res.status(200).json({ error: false, status: true, message: "Transfer successful." });
-    }
-    if (type == '2') {
-      const colorGameBalance = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?", [mobile]);
-      if (parseInt(colorGameBalance[0].wallet_balance) < parseInt(amount)) return res.status(302).json({ error: true, status: false, message: "Insufficient balance in GameWallet." });
-      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + ?, `game_wallet`=`game_wallet`-? WHERE `user_name` = ?", [parseInt(amount), parseInt(amount), mobile]);
+      return res.status(200).json({ error: false, status: true, message: "Transfer SuccessFully." });
+    } else if (type == '2') {
+      if (parseFloat(owner[0].game_wallet) < parseFloat(amount)) return res.status(302).json({ error: true, status: false, message: `Insufficient Balance in GameWallet.` });
+      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance`+?, `game_wallet`=`game_wallet`-? WHERE `user_name` = ?;", [parseInt(amount), parseInt(amount), mobile]);
       await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [mobile, 'Money Transfer', `Received from GameWallet`, parseInt(amount), mobile]);
       await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, 'Money Transfer', `Send`, parseInt(amount), mobile]);
-      return res.status(200).json({ error: false, status: true, message: "Transfer successful." });
+      return res.status(200).json({ error: false, status: true, message: "Transfer SuccessFully." });
+    } else {
+      return res.status(302).json({ error: true, status: false, message: "Invalid Transfer Type." });
     }
-    return res.status(302).json({ error: true, status: false, message: "Invalid transfer type." });
   } catch (err) {
     console.log(err);
     res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
@@ -1796,6 +1812,22 @@ app.post("/get-roi", async (req, res) => {
     });
   }
 })
+app.post('/get-current-time', async (req, res) => {
+  try {
+    res.status(200).json({
+      error: false,
+      status: true,
+      current_time: new Date(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: true,
+      status: false,
+      message: 'Failed to retrieve the current time',
+    });
+  }
+});
+
 
 async function sendMail(name, email, mobile, message) {
   try {
@@ -1827,72 +1859,6 @@ async function coded() {
       return codeleft();
     } else {
       return a;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-async function reffer(ba, ab) {
-  try {
-    await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`) VALUES (?,?)', [ba, ab]);
-  } catch (error) {
-    throw error;
-  }
-}
-async function reffer1(ba, ab) {
-  try {
-    await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`) VALUES (?,?)', [ba, ab]);
-  } catch (error) {
-    throw error;
-  }
-}
-async function reffer2(ba, ab) {
-  try {
-    const level1 = await queryAsync("SELECT IFNULL(ud.`reffer_by`, 0) as ref FROM `user_details` as ud WHERE ud.`reffer_code` = ?", [ab]);
-    if (level1[0].ref == '') {
-      await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`) VALUES (?,?)', [ba, ab]);
-    } else {
-      const level2 = await queryAsync("SELECT IFNULL(ud.`reffer_by`, 0) as reff FROM `user_details` as ud WHERE ud.`reffer_code` = ?", [level1[0].ref]);
-      if (level2[0].reff == '') {
-        await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`, `level_2`) VALUES (?,?,?)', [ba, ab, level1[0].ref]);
-      } else {
-        await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`, `level_2`, `level_3`) VALUES (?,?,?,?)', [ba, ab, level1[0].ref, level2[0].reff]);
-      }
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-async function reffer3(ba, ab) {
-  try {
-    const level1 = await queryAsync("SELECT IFNULL(ud.`reffer_by`, 0) as ref FROM `user_details` as ud WHERE ud.`reffer_code` = ?", [ab]);
-    if (level1[0].ref == '') {
-      await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`) VALUES (?,?)', [ba, ab]);
-    } else {
-      const level2 = await queryAsync("SELECT IFNULL(ud.`reffer_by`, 0) as reff FROM `user_details` as ud WHERE ud.`reffer_code` = ?", [level1[0].ref]);
-      if (level2[0].reff == '') {
-        await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`, `level_2`) VALUES (?,?,?)', [ba, ab, level1[0].ref]);
-      } else {
-        await queryAsync('INSERT INTO `user_level`(`user_reffral`, `level_1`, `level_2`, `level_3`) VALUES (?,?,?,?)', [ba, ab, level1[0].ref, level2[0].reff]);
-      }
-    }
-  } catch (err) {
-    throw err;
-  }
-}
-async function reffer_bonus(ba) {
-  try {
-    const result1 = await queryAsync("SELECT IFNULL(ul.`level_1`,0) as level_1,IFNULL(ul.`level_2`,0) as level_2,IFNULL(ul.`level_3`,0) as level_3 FROM `user_level` as ul WHERE ul.user_reffral = (SELECT ud.`reffer_code` FROM `user_details` as ud WHERE ud.`mobile` = ?);", [ba]);
-    if (result1) {
-      let a = Object.values(result1[0]);
-      for (let index = 0; index < a.length; index++) {
-        const element = a[index];
-        const resultt1 = await queryAsync("SELECT COUNT(*) as c FROM `buy_plan` WHERE `user_id` = (select mobile from user_details where reffer_code = ?) and `plan_id` != '1'", [element]);
-        if (resultt1[0].c > 0) {
-          await queryAsync(`UPDATE user_level as ul SET ul.status${index + 1} = 'Success' WHERE ul.user_reffral = (SELECT reffer_code FROM user_details as ud WHERE ud.mobile = ?)`, [ba]);
-          await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + (SELECT `price` FROM `level` WHERE `name` = ? UNION ALL SELECT 0 FROM DUAL WHERE NOT EXISTS(SELECT`price` FROM`level` WHERE`name` = ?)) WHERE `user_name` = (SELECT `mobile` FROM `user_details` WHERE `reffer_code` = ?)", [index + 1, index + 1, element]);
-        }
-      }
     }
   } catch (error) {
     throw error;
@@ -1932,41 +1898,6 @@ const flattenData = (data) => {
   result.sort((a, b) => a.uid.localeCompare(b.uid));
   return result;
 };
-// async function getAllChildren(referralId) {
-//   if (!referralId) {
-//     throw new Error("Referral ID is missing or invalid.");
-//   }
-//   const leftChildren = await queryAsync(
-//     'SELECT `username`, `uid`, `position`, `reffer_code` FROM `user_details` WHERE reffer_by = ? AND position = ? ORDER BY id ASC',
-//     [referralId, 'L']
-//   );
-//   const rightChildren = await queryAsync(
-//     'SELECT `username`, `uid`, `position`, `reffer_code` FROM `user_details` WHERE reffer_by = ? AND position = ? ORDER BY id ASC',
-//     [referralId, 'R']
-//   );
-//   let allChildren = [];
-//   for (let child of leftChildren) {
-//     const childDescendants = await getAllChildren(child.reffer_code);
-//     allChildren.push({
-//       username: child.username,
-//       uid: child.uid,
-//       position: child.position,
-//       reffer_code: child.reffer_code,
-//       children: childDescendants
-//     });
-//   }
-//   for (let child of rightChildren) {
-//     const childDescendants = await getAllChildren(child.reffer_code);
-//     allChildren.push({
-//       username: child.username,
-//       uid: child.uid,
-//       position: child.position,
-//       reffer_code: child.reffer_code,
-//       children: childDescendants
-//     });
-//   }
-//   return allChildren;
-// }
 async function getAllChildren(referralId) {
   if (!referralId) {
     throw new Error("Referral ID is missing or invalid.");
@@ -2120,20 +2051,54 @@ const decrypt = encrypted => CryptoJS.AES.decrypt(encrypted, secretKey).toString
 cron.schedule('0 0 * * *', async () => {
   try {
     const price = await queryAsync("SELECT `price` FROM `usdt` WHERE `status` = 'Y'");
-    const alldata = await queryAsync(`SELECT bp.id, (SELECT ud1.mobile FROM user_details AS ud1 WHERE ud1.id = bp.user_id) AS mobile, 
-      ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss WHERE usss.status = 'Y'), 3) AS amount,(SELECT nip.retrun_percentage FROM 
-      new_investment_plan AS nip WHERE nip.id = bp.plan_id) AS percentage,ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss 
-      WHERE usss.status = 'Y') * (SELECT nip.retrun_percentage FROM new_investment_plan AS nip  WHERE nip.id = bp.plan_id) / 100, 3)
-       AS calculated_return_amount,bp.total_retrun_amount, bp.status FROM buy_plan AS bp WHERE bp.status = 'ongoing';`);
-    for (const e of alldata) {
-      await queryAsync("UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = ?", [parseFloat(e.calculated_return_amount), e.mobile]);
-      await queryAsync("INSERT INTO statement (number, type, description, amount,balance) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))",
-        [e.mobile, 'Investment Return', 'Daily return credited', parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.mobile]);
-      await queryAsync("INSERT INTO `return_investment`(`mobile`, `investment_amount`, `today_return`, `total_return_amout`) VALUES (?,?,?,?)",
-        [e.mobile, e.amount, parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.total_retrun_amount]);
-      await queryAsync("UPDATE buy_plan SET total_retrun_amount = total_retrun_amount + ? WHERE id = ?", [parseFloat(e.calculated_return_amount / parseFloat(price[0].price)), e.id]);
+    if (!price || price.length === 0) {
+      throw new Error("USDT price not found.");
     }
-    await queryAsync("UPDATE `buy_plan` SET `status`='expire' WHERE `status`='ongoing' and `amount`*2 <=`total_retrun_amount`;");
+    const alldata = await queryAsync(`
+      SELECT bp.id, (SELECT ud1.mobile FROM user_details AS ud1 WHERE ud1.id = bp.user_id) AS mobile,ROUND(bp.amount,3) as oramount, 
+      ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss WHERE usss.status = 'Y'), 3) AS amount, (SELECT nip.retrun_percentage FROM new_investment_plan AS
+       nip WHERE nip.id = bp.plan_id) AS percentage,ROUND(bp.amount * (SELECT usss.price FROM usdt AS usss WHERE usss.status = 'Y') * (SELECT nip.retrun_percentage
+        FROM new_investment_plan AS nip  WHERE nip.id = bp.plan_id) / 100, 3) AS calculated_return_amount,ROUND(bp.amount * (SELECT nip.retrun_percentage 
+        FROM new_investment_plan AS nip  WHERE nip.id = bp.plan_id) / 100, 3) AS calculated_return_oramount,bp.total_return_amount, bp.status FROM buy_plan 
+        AS bp WHERE bp.status = 'ongoing';
+    `, []);
+    for (const e of alldata) {
+      const calculatedReturnORAmount = parseFloat(e.calculated_return_oramount);
+      const calculatedReturnAmount = parseFloat(e.calculated_return_amount);
+      const updatedTotalReturnAmount = parseFloat(parseFloat(e.total_return_amount) + calculatedReturnORAmount);
+      const reffal = await queryAsync("SELECT `reffer_code` FROM `user_details` WHERE `mobile`=?", [e.mobile]);
+      if (reffal.length > 0 && reffal[0].reffer_code) {
+        await givelevelincome(reffal[0].reffer_code);
+      }
+      await queryAsync(
+        "UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = ?",
+        [calculatedReturnAmount, e.mobile]
+      );
+      await queryAsync(
+        `INSERT INTO statement (number, type, description, amount, balance) 
+         VALUES (?, ?, ?, ?, 
+         (SELECT w.wallet_balance FROM wallet AS w WHERE w.user_name = ?))`,
+        [
+          e.mobile,
+          'Investment Return',
+          `Daily return credited`,
+          `${calculatedReturnORAmount} (₹${calculatedReturnAmount})`,
+          e.mobile
+        ]
+      );
+      await queryAsync(
+        "UPDATE buy_plan SET total_return_amount = total_return_amount + ? WHERE id = ?",
+        [updatedTotalReturnAmount, e.id]
+      );
+      await queryAsync(
+        "INSERT INTO return_investment (mobile, investment_amount, today_return, total_return_amount) VALUES (?, ?, ?, ?)",
+        [e.mobile, parseFloat(e.oramount), calculatedReturnORAmount, updatedTotalReturnAmount]
+      );
+    }
+    await queryAsync(
+      "UPDATE buy_plan SET status = 'expire' WHERE status = 'ongoing' AND amount * 2 <= total_return_amount;"
+    );
+
   } catch (error) {
     console.error("Error during cron job:", error);
   }
@@ -2157,41 +2122,81 @@ const getUserHierarchy = async (baseRefferCode, maxLevel, currentLevel = 1, hier
   if (currentLevel > maxLevel) {
     return hierarchy;
   }
-  const rows = await queryAsync(`SELECT ud.id, ud.username, TRUE AS check_plan,ud.reffer_code, ud.reffer_by, bp.amount *
-     (SELECT usss.price FROM usdt as usss WHERE usss.status = 'Y') as amount,(SELECT nip.retrun_percentage FROM new_investment_plan
-      as nip WHERE nip.id = bp.plan_id) as percentage,ud.position FROM user_details ud INNER JOIN buy_plan bp  ON ud.id = bp.user_id
-       WHERE ud.reffer_by = ?;`, [baseRefferCode]);
+  const rows = await queryAsync(`
+    SELECT ud.id,bp.id as plan_id, ud.username, TRUE AS check_plan, ud.reffer_code, ud.reffer_by, CAST(bp.amount AS DECIMAL(10, 2)) AS amount, 
+    (SELECT CAST(nip.retrun_percentage AS DECIMAL(10, 2)) FROM new_investment_plan as nip WHERE nip.id = bp.plan_id) as percentage, 
+    ROUND(bp.amount * (SELECT nip.retrun_percentage FROM new_investment_plan AS nip WHERE nip.id = bp.plan_id ) / 100, 3) AS calculated_return_amount,
+    ud.position FROM user_details as ud INNER JOIN buy_plan bp ON ud.id = bp.user_id WHERE ud.reffer_by = ?;`, [baseRefferCode]);
   if (Array.isArray(rows) && rows.length > 0) {
     hierarchy.push({ level: currentLevel, users: rows });
-    for (const user of rows) {
+    const data = filterByUniqueId(rows);
+    for (const user of data) {
       await getUserHierarchy(user.reffer_code, maxLevel, currentLevel + 1, hierarchy);
     }
   }
-  return hierarchy;
+  const mergedData = Object.values(
+    hierarchy.reduce((acc, curr) => {
+      if (!acc[curr.level]) {
+        acc[curr.level] = { level: curr.level, users: [] };
+      }
+      acc[curr.level].users = acc[curr.level].users.concat(curr.users);
+      return acc;
+    }, {})
+  );
+  return mergedData;
 };
-const ROI = async (baseRefferCode) => {
-  await queryAsync(`SELECT ud.id, ud.username, TRUE AS check_plan,ud.reffer_code, ud.reffer_by, bp.amount *
-     (SELECT usss.price FROM usdt as usss WHERE usss.status = 'Y') as amount,(SELECT nip.retrun_percentage FROM new_investment_plan
-      as nip WHERE nip.id = bp.plan_id) as percentage,ud.position FROM user_details ud INNER JOIN buy_plan bp  ON ud.id = bp.user_id
-       WHERE ud.reffer_by = ?;`, [baseRefferCode]);
+function filterByUniqueId(data) {
+  return Object.values(
+    data.reduce((acc, item) => {
+      if (!acc[item.id]) {
+        acc[item.id] = item;
+      }
+      return acc;
+    }, {})
+  );
 }
-
-app.post("/get-user-hierarchy", async (req, res) => {
-  try {
-    const baseRefferCode = req.body.baseRefferCode;
-    const hierarchy = await getUserHierarchy(baseRefferCode, parseInt(req.body.maxLevel) || 5);
-    const mergedData = Object.values(
-      hierarchy.reduce((acc, curr) => {
-        if (!acc[curr.level]) {
-          acc[curr.level] = { level: curr.level, users: [] };
-        }
-        acc[curr.level].users = acc[curr.level].users.concat(curr.users);
-        return acc;
-      }, {})
-    );
-    res.status(200).json(mergedData);
-  } catch (error) {
-    res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
+const givelevelincome = async (baseRefferCode) => {
+  if (!baseRefferCode) {
+    throw new Error("Base reference code is required.");
   }
-})
+  const get_percentage = await queryAsync("SELECT * FROM `level`;", []);
+  if (!get_percentage || get_percentage.length === 0) {
+    throw new Error("Level percentage data not found.");
+  }
+  const priceResult = await queryAsync("SELECT `price` FROM `usdt` WHERE `status` = ?;", ['Y']);
+  if (!priceResult || priceResult.length === 0) {
+    throw new Error("USDT price not found.");
+  }
+  const price = parseFloat(priceResult[0].price);
+  const hierarchy = await getUserHierarchy(baseRefferCode, get_percentage.length);
+  for (const element of hierarchy) {
+    for (const user of element.users) {
+      try {
+        const calculated_return_amount = parseFloat(
+          user.calculated_return_amount * (parseFloat(get_percentage[element.level - 1].percentage) / 100)
+        ).toFixed(5);
+        await queryAsync(
+          `INSERT INTO level_income (mobile, level, position, user_reffral, retrun_amount) VALUES 
+           ((SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?),?,?,?,?);`,
+          [baseRefferCode, element.level, user.position, user.reffer_code, calculated_return_amount]
+        );
+        await queryAsync("UPDATE buy_plan SET total_return_amount = total_return_amount + ? WHERE id = ?", [calculated_return_amount, user.plan_id])
+        // console.log([baseRefferCode, element.level, user.position, user.reffer_code, calculated_return_amount]);        
+        const totalAmount = parseFloat(calculated_return_amount * price).toFixed(5);
+        await queryAsync(
+          `UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = 
+           (SELECT ud.mobile FROM user_details as ud WHERE ud.reffer_code = ?);`,
+          [totalAmount, baseRefferCode]
+        );
+        // console.log([totalAmount, baseRefferCode]);        
+      } catch (error) {
+        console.error(`Error processing user ${user.reffer_code} at level ${element.level}:`, error);
+        throw error;
+      }
+    }
+  }
+
+  return { status: 'success', hierarchyProcessed: hierarchy.length };
+}
+// console.log(givelevelincome('5Zw8gbwv'));
 module.exports = app;
