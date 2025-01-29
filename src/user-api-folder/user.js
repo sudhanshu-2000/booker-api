@@ -65,7 +65,7 @@ const transporter = nodemailer.createTransport({
     domainName: 'kmaobharat.com',
     selector: 'default', // This should match the DKIM selector in your DNS records
   }
-});
+})
 // const transporter = nodemailer.createTransport({
 //   service: 'gmail',
 //   port: 465,
@@ -149,7 +149,7 @@ app.post("/register", async (req, res) => {
       message: "An error occurred. Please try again later.",
     });
   }
-});
+})
 app.post("/login", async (req, res) => {
   try {
     if (typeof req.body.password === 'number') {
@@ -205,7 +205,7 @@ app.post("/login", async (req, res) => {
       message: "An error occurred",
     });
   }
-});
+})
 app.post("/logout", async (req, res) => {
   try {
     await queryAsync(
@@ -220,7 +220,7 @@ app.post("/logout", async (req, res) => {
       message: "An error occurred",
     });
   }
-});
+})
 app.post('/check-user-existence', async (req, res) => {
   try {
     if (!validateEmail(req.body.email)) {
@@ -264,7 +264,7 @@ app.post('/check-user-existence', async (req, res) => {
       message: "An error occurred",
     });
   }
-});
+})
 
 app.post("/create-pin", verifytoken, async (req, res) => {
   try {
@@ -290,7 +290,7 @@ app.post("/create-pin", verifytoken, async (req, res) => {
       message: "Internal Server Error",
     });
   }
-});
+})
 app.post("/verify-pin", verifytoken, async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `user_pin` WHERE `user_id` = (SELECT `id` FROM `user_details` WHERE `mobile` = ?)", [req.body.mobile]);
@@ -324,7 +324,7 @@ app.post("/verify-pin", verifytoken, async (req, res) => {
       message: "Internal server error"
     });
   }
-});
+})
 app.post("/change-pin", async (req, res) => {
   try {
     const auth = await new Promise((resolve, reject) => {
@@ -362,7 +362,7 @@ app.post("/change-pin", async (req, res) => {
       message: "Internal Server Error",
     });
   }
-});
+})
 
 
 app.post("/change-password", verifytoken, async (req, res) => {
@@ -396,7 +396,7 @@ app.post("/change-password", verifytoken, async (req, res) => {
       message: "Internal Server Error",
     });
   }
-});
+})
 app.post("/forget-password", async (req, res) => {
   try {
     jwt.verify(req.body.token, process.env.SECRET_KEY_VERIFY, async (err, auth) => {
@@ -437,7 +437,7 @@ app.post("/forget-password", async (req, res) => {
       message: "Internal Server Error",
     });
   }
-});
+})
 
 app.post("/user-details", verifytoken, async (req, res) => {
   try {
@@ -473,7 +473,7 @@ app.post("/user-details", verifytoken, async (req, res) => {
 
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
-});
+})
 app.post("/get-wagering", verifytoken, async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `plans`");
@@ -485,44 +485,38 @@ app.post("/get-wagering", verifytoken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
-});
+})
 app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (req, res) => {
   try {
     const { mobile, data } = req.body;
     if (!data) {
-      return res.status(400).json({ error: true, message: "Encrypted data is missing." });
+      return res.status(400).json({ error: true, status: false, message: "Encrypted data is missing." });
     }
     let ab;
     try {
       ab = decrypt(data);
     } catch (err) {
       console.error("Decryption failed:", err.message);
-      return res.status(400).json({ error: true, message: "Failed to decrypt input data." });
+      return res.status(400).json({ error: true, status: false, message: "Failed to decrypt input data." });
     }
-    const { amount, type, game_type, uid, timestamp } = JSON.parse(ab);
-    if (!['add', 'deduct', 'loss'].includes(type)) {
+    const { amount, type, game_type, uid, timestamp, details } = JSON.parse(ab);
+    if (!['add', 'deduct'].includes(type)) {
       return res.status(302).json({
         error: true,
         status: false,
         message: `Invalid type provided. Use 'add' or 'deduct'.`
       });
     }
-    if (!mobile) {
+    if (!mobile || !amount || !type || !game_type) {
       return res.status(302).json({
         error: true,
         status: false,
-        message: `Missing required field Mobile `
+        message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'}.`
       });
     }
+    console.log(JSON.parse(ab));
     if (type === 'deduct') {
-      if (!amount || !type || !game_type) {
-        return res.status(302).json({
-          error: true,
-          status: false,
-          message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'}.`
-        });
-      }
-      const transactionAmount = parseInt(amount, 10);
+      const transactionAmount = parseFloat(amount);
       if (isNaN(transactionAmount) || transactionAmount <= 0) {
         return res.status(302).json({
           error: true,
@@ -537,25 +531,18 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
       if (user.game_wallet < transactionAmount) {
         return res.status(302).json({ error: true, status: false, message: 'Insufficient balance.' });
       }
-      await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [amount, mobile]);
+      await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
       await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync(`INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance) VALUES (?,'Add Bet',?,?,(SELECT (game_wallet) as balance FROM wallet WHERE user_name= ?))`, [mobile, game_type, amount, mobile]);
+      await queryAsync(`INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance,details) VALUES (?,'Add Bet',?,?,(SELECT (game_wallet) as balance FROM wallet WHERE user_name= ?),?)`, [mobile, game_type, amount, mobile, JSON.stringify(details) || '']);
+      await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
       return res.status(200).json({
         error: false,
         status: true,
         message: 'Wallet balance successfully deducted.'
       });
     }
-    if (type == 'add') {
-      if (!amount || !type || !game_type) {
-        return res.status(302).json({
-          error: true,
-          status: false,
-          message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'
-            }.`
-        });
-      }
-      const transactionAmount = parseInt(amount, 10);
+    if (type === 'add') {
+      const transactionAmount = parseFloat(amount);
       if (isNaN(transactionAmount) || transactionAmount <= 0) {
         return res.status(302).json({
           error: true,
@@ -572,7 +559,8 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
         });
       }
       await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`,`checkgameid`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?),?)", [mobile, game_type, amount, mobile, uid + '_' + timestamp]);
+      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`,`checkgameid`,`details`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?),?,?)", [mobile, game_type, amount, mobile, uid + '_' + timestamp, JSON.stringify(details) || '']);
+      await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
       return res.status(200).json({
         error: false,
         status: true,
@@ -638,8 +626,7 @@ app.post("/get-single-casino", async (req, res) => {
       msg: "Internal Server Error",
     });
   }
-});
-
+})
 
 
 app.post("/update-user-details", verifytoken, async (req, res) => {
@@ -687,7 +674,7 @@ app.post("/update-user-details", verifytoken, async (req, res) => {
       message: "Internal Server Error",
     });
   }
-});
+})
 app.post("/get-tree", async (req, res) => {
   try {
     const result1 = await queryAsync("SELECT `reffer_code` FROM `user_details` WHERE `uid` = ?", [req.body.uid]);
@@ -759,7 +746,7 @@ app.post("/get-otp", async (req, res) => {
       msg: "Internal Server Error",
     });
   }
-});
+})
 app.post("/verify-otp", async (req, res) => {
   try {
     const email = req.body.email;
@@ -797,7 +784,7 @@ app.post("/verify-otp", async (req, res) => {
       msg: "Internal Server Error",
     });
   }
-});
+})
 app.post("/get-reffer", verifytoken, async (req, res) => {
   try {
     const result1 = await queryAsync("SELECT ur.id,ud.username,ud.mobile,ud.reffer_by,(SELECT `reffer_to` FROM `reffer_bonus` WHERE `status` = 'Y') as reffer_to_amount,ud.reffer_code,ur.status,ur.date FROM `user_reffer` as ur INNER JOIN user_details as ud on ur.reffer_by = ud.reffer_code WHERE ur.`reffer_to` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)", [req.body.mobile]);
@@ -846,7 +833,7 @@ app.post('/get-current-offer', verifytoken, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: true, status: false, message: 'Server Error' });
   }
-});
+})
 app.post('/check-coupon-code', verifytoken, async (req, res) => {
   try {
     const { code, balance } = req.body;
@@ -863,7 +850,7 @@ app.post('/check-coupon-code', verifytoken, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: true, status: false, message: 'Server Error' });
   }
-});
+})
 app.post('/add-contact-us', async (req, res) => {
   const { name, email, message, phone } = req.body;
   if (!name || !email || !message || !phone) {
@@ -890,7 +877,7 @@ app.post('/add-contact-us', async (req, res) => {
       message: 'Failed to add contact and send email'
     });
   }
-});
+})
 
 app.post("/token-check", async (req, res) => {
   const bearerHeader = req.headers["authorization"];
@@ -937,7 +924,7 @@ app.post("/token-check", async (req, res) => {
   } else {
     res.sendStatus(403);
   }
-});
+})
 app.post("/get-home-gallery", async (req, res) => {
   try {
     const result = await queryAsync("SELECT `image` FROM `gallery` WHERE `status` = 'Y' AND `home_check` = 'true' ORDER BY `gallery`.`id` DESC");
@@ -953,7 +940,7 @@ app.post("/get-home-gallery", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-gallery", async (req, res) => {
   try {
     const result = await queryAsync("SELECT `image` FROM `gallery` WHERE `status` = 'Y' ORDER BY `gallery`.`id` DESC");
@@ -969,7 +956,7 @@ app.post("/get-gallery", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-home-service", async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `service` WHERE `status` = 'Y' and `page`='home' ORDER BY `service`.`id` DESC");
@@ -985,11 +972,11 @@ app.post("/get-home-service", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-rental-items", async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `rental_items` WHERE `status` = 'Y'");
-    res.status(200).json({
+    return res.status(200).json({
       error: false,
       status: true,
       data: result
@@ -1001,7 +988,7 @@ app.post("/get-rental-items", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-services", async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `service` WHERE `status` = 'Y' and `page`='service' ORDER BY `service`.`id` DESC");
@@ -1017,7 +1004,7 @@ app.post("/get-services", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-home-page", async (req, res) => {
   try {
     const slider = await queryAsync("SELECT * FROM `sliders` WHERE `page` = 'home'");
@@ -1045,7 +1032,7 @@ app.post("/get-home-page", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 app.post("/get-about-page", async (req, res) => {
   try {
     const about_details = await queryAsync("SELECT * FROM `about_details` where `page` = 'about'");
@@ -1068,7 +1055,7 @@ app.post("/get-about-page", async (req, res) => {
       message: 'An error occurred'
     });
   }
-});
+})
 
 app.post("/get-pay-method", async (req, res) => {
   try {
@@ -1088,7 +1075,7 @@ app.post("/get-pay-method", async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 app.post("/deposit-request", upload.single("image"), verifytoken, async (req, res) => {
   try {
     const { mobile, amount, deposit_id, transection_id } = req.body;
@@ -1153,7 +1140,7 @@ app.post("/deposit-request", upload.single("image"), verifytoken, async (req, re
       message: "Internal Server Error",
     });
   }
-});
+})
 app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (req, res) => {
   try {
     const { mobile, amount, deposit_id, transection_id, price_at_time, currency } = req.body;
@@ -1219,7 +1206,7 @@ app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (re
       message: "Internal Server Error",
     });
   }
-});
+})
 app.post("/get-deposit-request", verifytoken, async (req, res) => {
   try {
     if (!req.body.mobile) {
@@ -1244,7 +1231,7 @@ app.post("/get-deposit-request", verifytoken, async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 
 //Bank Details
 app.post("/update-bankdetails", verifytoken, async (req, res) => {
@@ -1275,7 +1262,7 @@ app.post("/update-bankdetails", verifytoken, async (req, res) => {
       error: true, status: false, message: "An error occurred while adding bank details.",
     });
   }
-});
+})
 app.post("/add-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin } = req.body;
@@ -1336,7 +1323,7 @@ app.post("/add-withdrawal-request", verifytoken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
-});
+})
 app.post("/add-usdt-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin, address, price_at_time, currency } = req.body;
@@ -1377,7 +1364,7 @@ app.post("/add-usdt-withdrawal-request", verifytoken, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
   }
-});
+})
 app.post("/decline-withdrawal-request", verifytoken, async (req, res) => {
   try {
     const { id, mobile } = req.body;
@@ -1448,7 +1435,7 @@ app.post("/decline-withdrawal-request", verifytoken, async (req, res) => {
       message: "Internal Server Error.",
     });
   }
-});
+})
 
 
 
@@ -1482,7 +1469,7 @@ app.post("/check-user", async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 app.post("/money-transfer", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin, user_mobile } = req.body;
@@ -1552,7 +1539,7 @@ app.post("/money-transfer", verifytoken, async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 app.post("/get-plans", async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `new_investment_plan` as nip WHERE nip.`status` = 'Y'");
@@ -1598,8 +1585,19 @@ app.post("/get-game-statement", verifytoken, async (req, res) => {
       });
     }
     const result = await queryAsync("SELECT * FROM `game_statement` WHERE `game_type` = ?", [req.body.type]);
+    const parsedData = result.map(item => ({
+      ...item,
+      details: (() => {
+        try {
+          return JSON.parse(item.details);
+        } catch {
+          return item.details;
+        }
+      })()
+    }));
+
     res.status(200).json(
-      result.length ? { error: false, status: true, data: result } : { error: false, status: false, message: "No records found", data: [] }
+      parsedData.length ? { error: false, status: true, data: parsedData } : { error: false, status: false, message: "No records found", data: [] }
     );
   } catch (err) {
     console.error("Error in /get-game-statement:", err);
@@ -1669,6 +1667,7 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
               "INSERT INTO `buy_plan` (`user_id`, `plan_id`, `amount`) VALUES ((SELECT ud.`id` FROM `user_details` as ud WHERE ud.`mobile` = ?), ?, ?)",
               [mobile, check[0].id, amount]
             );
+            // await queryAsync("UPDATE `user_reffer` SET `plancheck`= 'Y' WHERE `reffer_by` = (SELECT ud.`reffer_code` FROM `user_details` as ud WHERE ud.`mobile`=?) and `plancheck` = 'N'", [mobile]);
             return res.status(200).json({ error: false, status: true });
           } else {
             return res.status(302).json({ error: true, status: false, message: "Insufficient wallet balance. Transfer cannot be completed." });
@@ -1691,7 +1690,7 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 app.post("/get-investment-plan", async (req, res) => {
   try {
     const result = await queryAsync("SELECT bp.id, bp.amount, ip.`plan_name`,ip.`amount_start`,ip.`amount_end`, ip.`retrun_percentage`, bp.status, bp.date FROM buy_plan AS bp INNER JOIN new_investment_plan AS ip ON bp.plan_id = ip.id WHERE bp.user_id = (SELECT ud.id FROM user_details AS ud WHERE ud.mobile = ?);", [req.body.mobile]);
@@ -1707,7 +1706,7 @@ app.post("/get-investment-plan", async (req, res) => {
       message: "Internal Server Error"
     });
   }
-});
+})
 app.post("/color-money-transfer", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin, type } = req.body;
@@ -1736,7 +1735,7 @@ app.post("/color-money-transfer", verifytoken, async (req, res) => {
     console.log(err);
     res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
   }
-});
+})
 app.post("/add-member", async (req, res) => {
   try {
     let referralCode = await coded();
@@ -1787,7 +1786,7 @@ app.post("/add-member", async (req, res) => {
       message: "An error occurred. Please try again later.",
     });
   }
-});
+})
 app.post("/get-roi", async (req, res) => {
   try {
     const { mobile } = req.body;
@@ -1826,7 +1825,7 @@ app.post('/get-current-time', async (req, res) => {
       message: 'Failed to retrieve the current time',
     });
   }
-});
+})
 
 
 async function sendMail(name, email, mobile, message) {
@@ -2197,6 +2196,10 @@ const givelevelincome = async (baseRefferCode) => {
   }
 
   return { status: 'success', hierarchyProcessed: hierarchy.length };
+}
+const givematchingincome = async (mobile) => {
+  const leftcheck = await queryAsync("SELECT bp.*,ur.reffer_to,ur.reffer_by,ur.position FROM `buy_plan` as bp INNER join user_details as ud on bp.user_id = ud.id INNER JOIN user_reffer as ur on ud.reffer_code = ur.reffer_by where bp.pair = 'N';", [mobile]);
+  // const rightcheck = await queryAsync("SELECT * FROM `user_reffer` WHERE `reffer_to` = (select ud.`reffer_code` from user_details as ud where ud.mobile = ?) AND `position` = 'R' ORDER BY `id` ASC Limit 1;", [mobile]);
 }
 // console.log(givelevelincome('5Zw8gbwv'));
 module.exports = app;

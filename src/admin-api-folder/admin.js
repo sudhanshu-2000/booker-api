@@ -1548,19 +1548,4 @@ cron.schedule('0 8,15 * * *', async () => {
     console.error("Error during cron job:", error);
   }
 });
-
-// Helper function to get payment method icon
-function getIcon(paymentMethod) {
-  switch (paymentMethod) {
-    case "Google Pay":
-      return "googlepay.png";
-    case "Phone Pe":
-      return "phonepe.png";
-    case "Paytm":
-      return "paytm.png";
-    default:
-      return "upi.png";
-  }
-}
-
 module.exports = app;
