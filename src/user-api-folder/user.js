@@ -126,10 +126,13 @@ app.post("/register", async (req, res) => {
     const hashedPassword = bcrypt.hashSync(req.body.password, bcrypt.genSaltSync(12));
     await queryAsync(
       "INSERT INTO `user_details`(`mobile`, `username`, `password`, `email`, `uid`, `reffer_by`, `reffer_code`, `position`) VALUES (?,?,?,?,?,?,?,?)",
-      [req.body.mobile, req.body.name, hashedPassword, req.body.email, newId, req.body.reffer_by || '5Zw8gbwv', referralCode, req.body.position || "L"]
+      [req.body.mobile, req.body.name, hashedPassword, req.body.email, newId, req.body.reffer_by || "", referralCode, req.body.position]
     );
-    await queryAsync('INSERT INTO `user_reffer`(`reffer_to`, `reffer_by`, `position`) VALUES (?,?,?)', [req.body.reffer_by || '5Zw8gbwv', referralCode, req.body.position || "L"]);
+    if (req.body.reffer_by) {
+      await queryAsync('INSERT INTO `user_reffer`(`reffer_to`, `reffer_by`, `position`) VALUES (?,?,?)', [req.body.reffer_by, referralCode, req.body.position]);
+    }
     await queryAsync('INSERT INTO `wallet`(`user_name`) VALUES(?)', [req.body.mobile]);
+    await queryAsync("INSERT INTO `wagring_history`(`username`) VALUES (?)", [req.body.mobile]);
     return res.status(200).json({
       error: false,
       status: true,
@@ -152,60 +155,68 @@ app.post("/register", async (req, res) => {
 })
 app.post("/login", async (req, res) => {
   try {
-    if (typeof req.body.password === 'number') {
-      return res.status(302).json({
+    if (typeof req.body.password !== 'string') {
+      return res.status(400).json({
         error: true,
         status: false,
-        message: "Password Must be require String value",
+        message: "Password must be a string",
       });
     }
-    const userResult = await queryAsync("SELECT * FROM user_details WHERE mobile = ? or email = ?", [req.body.mobile, req.body.mobile]);
+    let query = "SELECT * FROM user_details WHERE ";
+    let param;
     if (validateEmail(req.body.mobile)) {
-      req.body.mobile = userResult[0].mobile;
-    }
-    if (userResult.length > 0) {
-      const status = bcrypt.compareSync(req.body.password, userResult[0].password);
-      if (status) {
-        const token = jwt.sign({ username: userResult[0].mobile }, process.env.SECRET_KEY_USER, { expiresIn: '1d' });
-        const balance = await queryAsync("SELECT `wallet_balance` FROM `wallet` WHERE `user_name` = ?", [req.body.mobile]);
-        const tokencheck = await queryAsync("SELECT * from `login_check` where `user_name`= ?", [req.body.mobile]);
-        if (tokencheck.length == 0) {
-          await queryAsync("INSERT INTO `login_check`(`user_name`, `token`) VALUES (?,?)", [req.body.mobile, token])
-        } else {
-          await queryAsync("UPDATE `login_check` SET `token`=? WHERE `user_name` = ?", [token, req.body.mobile])
-        }
-        return res.status(200).json({
-          error: false,
-          status: true,
-          ID: userResult[0].uid,
-          username: userResult[0].username,
-          mobile: userResult[0].mobile,
-          balance: balance[0].wallet_balance,
-          message: "Login Successfully",
-          token,
-        });
-      } else {
-        return res.status(404).json({
-          error: true,
-          status: false,
-          message: "Mobile Or Password is Wrong",
-        });
-      }
+      query += "email = ?";
+      param = req.body.mobile;
     } else {
+      query += "mobile = ?";
+      param = req.body.mobile;
+    }
+    const userResult = await queryAsync(query, [param]);
+    if (userResult.length === 0) {
       return res.status(404).json({
         error: true,
-        message: "Mobile Number is Not Exist",
+        status: false,
+        message: "Mobile number or email does not exist",
       });
     }
+    const user = userResult[0];
+    const isPasswordValid = bcrypt.compareSync(req.body.password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        error: true,
+        status: false,
+        message: "Mobile or password is incorrect",
+      });
+    }
+    const token = jwt.sign({ username: user.mobile }, process.env.SECRET_KEY_USER, { expiresIn: "1d" });
+    const balanceResult = await queryAsync("SELECT `wallet_balance` FROM `wallet` WHERE `user_name` = ?", [user.mobile]);
+    const balance = balanceResult.length > 0 ? balanceResult[0].wallet_balance : 0;
+    const tokenCheck = await queryAsync("SELECT * FROM `login_check` WHERE `user_name` = ?", [user.mobile]);
+    if (tokenCheck.length === 0) {
+      await queryAsync("INSERT INTO `login_check` (`user_name`, `token`) VALUES (?, ?)", [user.mobile, token]);
+    } else {
+      await queryAsync("UPDATE `login_check` SET `token` = ? WHERE `user_name` = ?", [token, user.mobile]);
+    }
+    return res.status(200).json({
+      error: false,
+      status: true,
+      ID: user.uid,
+      username: user.username,
+      mobile: user.mobile,
+      balance,
+      message: "Login successful",
+      token,
+    });
   } catch (err) {
-    console.log(err);
+    console.error(err);
     return res.status(500).json({
       error: true,
       status: false,
-      message: "An error occurred",
+      message: "An internal server error occurred",
     });
   }
-})
+});
+
 app.post("/logout", async (req, res) => {
   try {
     await queryAsync(
@@ -265,7 +276,6 @@ app.post('/check-user-existence', async (req, res) => {
     });
   }
 })
-
 app.post("/create-pin", verifytoken, async (req, res) => {
   try {
     const id = await queryAsync("SELECT `id` FROM `user_details` WHERE `mobile` = ?", [req.body.mobile]);
@@ -363,8 +373,6 @@ app.post("/change-pin", async (req, res) => {
     });
   }
 })
-
-
 app.post("/change-password", verifytoken, async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM user_details WHERE `mobile` = ?", [req.body.mobile]);
@@ -438,42 +446,118 @@ app.post("/forget-password", async (req, res) => {
     });
   }
 })
+// app.post("/user-details", verifytoken, async (req, res) => {
+//   try {
+//     const mobile = req.body.mobile;
+//     const bearerToken = req.headers["authorization"]?.split(" ")[1];
+//     const tokencheck = await queryAsync("Select * from `login_check` where `user_name`= ?", [req.body.mobile]);
+//     if (tokencheck[0].token != bearerToken) {
+//       return res.sendStatus(403);
+//     }
+//     const [result, bank, direct_downline, my_investment, withdrawal, deposit, data] = await Promise.all([
+//       queryAsync("SELECT ud.id, ud.username AS uname, ud.mobile, (SELECT us.`currency` FROM `usdt` AS us WHERE us.`status` = 'Y') AS currency, (SELECT uss.`price` FROM `usdt` AS uss WHERE uss.`status` = 'Y') AS currency_rate, ud.email, ud.user_pin, ud.pincode, ud.uid, ud.bank_status, ud.upi_id, ud.reffer_code, wa.wallet_balance, CAST(wa.wagering AS DECIMAL(10,2)) as wagering, (wh.vip_id + 0) as vip_id,wh.levelup_check as is_levelup_claimed,wh.monthly_reward as is_monthly_rewarded,wa.game_wallet as color_wallet_balnace, ud.date FROM `user_details` AS ud INNER JOIN `wallet` AS wa ON ud.mobile = wa.user_name INNER JOIN wagring_history as wh on wh.username = ud.mobile WHERE ud.mobile = ?", [mobile]),
+//       queryAsync("SELECT CASE WHEN `status` = 'Y' THEN `account_no` ELSE NULL END as ac_no, CASE WHEN `status` = 'Y' THEN `ifsc_code` ELSE NULL END as ifsc_code, CASE WHEN `status` = 'Y' THEN `account_holder_name` ELSE NULL END as ac_name, CASE WHEN `status` = 'Y' THEN `bankname` ELSE NULL END as bank_name, CASE WHEN `status` = 'Y' THEN `account_type` ELSE NULL END as ac_type, `reason`, `status` FROM `userbankdeatils` WHERE `user_id` = (SELECT `id` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
+//       queryAsync("SELECT COUNT(*) as count FROM `user_details` WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
+//       queryAsync("SELECT SUM(`amount`) as sum FROM `buy_plan` WHERE `user_id` = (SELECT `id` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
+//       queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN `balance` * price_at_that_time ELSE `balance` END) AS total_amount FROM `deposit` WHERE transaction_id IS NULL AND user_name = ? AND status = 'Success'", [mobile]),
+//       queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN `balance` * price_at_that_time ELSE `balance` END) AS total_amount FROM `deposit` WHERE transaction_id IS NOT NULL AND user_name = ? AND status = 'Success'", [mobile]),
+//       queryAsync("SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?", [mobile])
+//     ]);
+//     const my_downline = flattenData(await getAllChildren(data[0].reffer_code));
+//       if (!result.length) {
+//       return res.status(404).json({
+//         error: true,
+//         message: "User not found",
+//       });
+//     }
+//     Object.assign(result[0], {
+//       my_downline: my_downline.length,
+//       // color_wallet_balnace: wallet.length ? wallet[0].wb : 0,
+//       // color_wagering_amount: wallet.length ? wallet[0].wagering : 0,
+//       direct_downline: direct_downline.length ? direct_downline[0].count : 0,
+//       my_investment: my_investment.length ? my_investment[0].sum : 0,
+//       withdrawal: withdrawal.length ? withdrawal[0].total_amount : 0,
+//       deposit: deposit.length ? deposit[0].total_amount : 0,
+//       ...(bank.length ? bank[0] : {})
+//     });
+//     res.status(200).json({ error: false, status: true, data: result });
+//   } catch (err) {
+//     console.log(err);
 
+//     res.status(500).json({ error: true, message: "Internal Server Error" });
+//   }
+// })
 app.post("/user-details", verifytoken, async (req, res) => {
   try {
     const mobile = req.body.mobile;
     const bearerToken = req.headers["authorization"]?.split(" ")[1];
-    const tokencheck = await queryAsync("Select * from `login_check` where `user_name`= ?", [req.body.mobile]);
-    if (tokencheck[0].token != bearerToken) {
+
+    // Check if token matches
+    const tokencheck = await queryAsync("SELECT * FROM `login_check` WHERE `user_name`= ?", [mobile]);
+    if (!tokencheck.length || tokencheck[0].token !== bearerToken) {
       return res.sendStatus(403);
     }
+
+    // Fetch all required data in parallel
     const [result, bank, direct_downline, my_investment, withdrawal, deposit, data] = await Promise.all([
-      queryAsync("SELECT ud.id, ud.username AS uname, ud.mobile, (SELECT us.`currency` FROM `usdt` AS us WHERE us.`status` = 'Y') AS currency, (SELECT uss.`price` FROM `usdt` AS uss WHERE uss.`status` = 'Y') AS currency_rate, ud.email, ud.user_pin, ud.pincode, ud.uid, ud.bank_status, ud.upi_id, ud.reffer_code, wa.wallet_balance, wa.wagering,wa.game_wallet as color_wallet_balnace, ud.date FROM `user_details` AS ud INNER JOIN `wallet` AS wa ON ud.mobile = wa.user_name WHERE ud.mobile = ?", [mobile]),
-      queryAsync("SELECT CASE WHEN `status` = 'Y' THEN `account_no` ELSE NULL END as ac_no, CASE WHEN `status` = 'Y' THEN `ifsc_code` ELSE NULL END as ifsc_code, CASE WHEN `status` = 'Y' THEN `account_holder_name` ELSE NULL END as ac_name, CASE WHEN `status` = 'Y' THEN `bankname` ELSE NULL END as bank_name, CASE WHEN `status` = 'Y' THEN `account_type` ELSE NULL END as ac_type, `reason`, `status` FROM `userbankdeatils` WHERE `user_id` = (SELECT `id` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
-      queryAsync("SELECT COUNT(*) as count FROM `user_details` WHERE `reffer_by` = (SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
-      queryAsync("SELECT SUM(`amount`) as sum FROM `buy_plan` WHERE `user_id` = (SELECT `id` FROM `user_details` WHERE `mobile` = ?)", [mobile]),
-      queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN `balance` * price_at_that_time ELSE `balance` END) AS total_amount FROM `deposit` WHERE transaction_id IS NULL AND user_name = ? AND status = 'Success'", [mobile]),
-      queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN `balance` * price_at_that_time ELSE `balance` END) AS total_amount FROM `deposit` WHERE transaction_id IS NOT NULL AND user_name = ? AND status = 'Success'", [mobile]),
-      queryAsync("SELECT `reffer_code` FROM `user_details` WHERE `mobile` = ?", [mobile])
+      queryAsync(`
+        SELECT 
+          ud.id, ud.username AS uname, ud.mobile, 
+          (SELECT us.currency FROM usdt AS us WHERE us.status = 'Y') AS currency, 
+          (SELECT uss.price FROM usdt AS uss WHERE uss.status = 'Y') AS currency_rate, 
+          ud.email, ud.user_pin, ud.pincode, ud.uid, ud.bank_status, ud.upi_id, 
+          ud.reffer_code, wa.wallet_balance, 
+          CAST(wa.wagering AS DECIMAL(10,2)) as wagering, 
+          (wh.vip_id + 0) as vip_id, 
+          wh.levelup_check as is_levelup_claimed, 
+          wh.monthly_reward as is_monthly_rewarded, 
+          wa.game_wallet as color_wallet_balnace, 
+          ud.date 
+        FROM user_details AS ud 
+        INNER JOIN wallet AS wa ON ud.mobile = wa.user_name 
+        INNER JOIN wagring_history as wh ON wh.username = ud.mobile 
+        WHERE ud.mobile = ?`, [mobile]
+      ),
+      queryAsync(`
+        SELECT 
+          CASE WHEN status = 'Y' THEN account_no ELSE NULL END as ac_no, 
+          CASE WHEN status = 'Y' THEN ifsc_code ELSE NULL END as ifsc_code, 
+          CASE WHEN status = 'Y' THEN account_holder_name ELSE NULL END as ac_name, 
+          CASE WHEN status = 'Y' THEN bankname ELSE NULL END as bank_name, 
+          CASE WHEN status = 'Y' THEN account_type ELSE NULL END as ac_type, 
+          reason, status 
+        FROM userbankdeatils 
+        WHERE user_id = (SELECT id FROM user_details WHERE mobile = ?)`, [mobile]
+      ),
+      queryAsync("SELECT COUNT(*) as count FROM user_details WHERE reffer_by = (SELECT reffer_code FROM user_details WHERE mobile = ?)", [mobile]),
+      queryAsync("SELECT SUM(amount) as sum FROM buy_plan WHERE user_id = (SELECT id FROM user_details WHERE mobile = ?)", [mobile]),
+      queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN balance * price_at_that_time ELSE balance END) AS total_amount FROM deposit WHERE transaction_id IS NULL AND user_name = ? AND status = 'Success'", [mobile]),
+      queryAsync("SELECT SUM(CASE WHEN payment_type = 'USDT' THEN balance * price_at_that_time ELSE balance END) AS total_amount FROM deposit WHERE transaction_id IS NOT NULL AND user_name = ? AND status = 'Success'", [mobile]),
+      queryAsync("SELECT reffer_code FROM user_details WHERE mobile = ?", [mobile])
     ]);
-    const my_downline = flattenData(await getAllChildren(data[0].reffer_code));
-    Object.assign(result[0], {
+
+    // Process Downline Data
+    const my_downline = flattenData(await getAllChildren(data[0]?.reffer_code));
+
+    // ✅ Safely assign properties only if `result[0]` exists
+    const userDetails = {
+      ...result[0],
       my_downline: my_downline.length,
-      // color_wallet_balnace: wallet.length ? wallet[0].wb : 0,
-      // color_wagering_amount: wallet.length ? wallet[0].wagering : 0,
       direct_downline: direct_downline.length ? direct_downline[0].count : 0,
       my_investment: my_investment.length ? my_investment[0].sum : 0,
       withdrawal: withdrawal.length ? withdrawal[0].total_amount : 0,
       deposit: deposit.length ? deposit[0].total_amount : 0,
-      ...(bank.length ? bank[0] : {})
-    });
-    res.status(200).json({ error: false, status: true, data: result });
-  } catch (err) {
-    console.log(err);
+      ...(bank.length ? bank[0] : {}) // Merge bank details safely
+    };
 
+    res.status(200).json({ error: false, status: true, data: [userDetails] });
+
+  } catch (err) {
+    console.error("Error in /user-details:", err);
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
-})
+});
+
 app.post("/get-wagering", verifytoken, async (req, res) => {
   try {
     const result = await queryAsync("SELECT * FROM `plans`");
@@ -486,26 +570,104 @@ app.post("/get-wagering", verifytoken, async (req, res) => {
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
 })
+// app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (req, res) => {
+//   try {
+//     const { mobile, data } = req.body;
+//     if (!data) {
+//       return res.status(400).json({ error: true, status: false, message: "Encrypted data is missing." });
+//     }
+//     let ab;
+//     try {
+//       ab = decrypt(data);
+//     } catch (err) {
+//       console.error("Decryption failed:", err.message);
+//       return res.status(400).json({ error: true, status: false, message: "Failed to decrypt input data." });
+//     }
+//     const { amount, type, game_type, uid, timestamp, details } = JSON.parse(ab);
+//     if (!['add', 'deduct'].includes(type)) {
+//       return res.status(302).json({
+//         error: true,
+//         status: false,
+//         message: `Invalid type provided. Use 'add' or 'deduct'.`
+//       });
+//     }
+//     if (!mobile || !amount || !type || !game_type) {
+//       return res.status(302).json({
+//         error: true,
+//         status: false,
+//         message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'}.`
+//       });
+//     }
+//     // console.log(JSON.parse(ab));
+//     if (type === 'deduct') {
+//       const transactionAmount = parseFloat(amount);
+//       if (isNaN(transactionAmount) || transactionAmount <= 0) {
+//         return res.status(302).json({
+//           error: true,
+//           status: false,
+//           message: 'Invalid amount provided. Amount must be a positive number.'
+//         });
+//       }
+//       const [user] = await queryAsync("SELECT game_wallet FROM `wallet` WHERE `user_name` = ?", [mobile]);
+//       if (!user) {
+//         return res.status(302).json({ error: true, status: false, message: 'User not found.' });
+//       }
+//       if (user.game_wallet < transactionAmount) {
+//         return res.status(302).json({ error: true, status: false, message: 'Insufficient balance.' });
+//       }
+//       await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ?, `monthly_wagering` = `monthly_wagering` + ? WHERE `user_name` = ?", [transactionAmount, transactionAmount, mobile]);
+//       await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [transactionAmount, mobile]);
+//       await queryAsync(`INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance,details) VALUES (?,'Add Bet',?,?,(SELECT (game_wallet) as balance FROM wallet WHERE user_name= ?),?)`, [mobile, game_type, amount, mobile, JSON.stringify(details) || '']);
+//       await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
+//       return res.status(200).json({ error: false, status: true, message: 'Wallet balance successfully deducted.' });
+//     }
+//     if (type === 'add') {
+//       const transactionAmount = parseFloat(amount);
+//       if (isNaN(transactionAmount) || transactionAmount <= 0) {
+//         return res.status(302).json({
+//           error: true,
+//           status: false,
+//           message: 'Invalid amount provided. Amount must be a positive number.'
+//         });
+//       }
+//       const checkgameid = await queryAsync("SELECT * FROM `game_statement` WHERE `checkgameid` = ?", [uid + '_' + timestamp]);
+//       if (checkgameid.length > 0) {
+//         return res.status(302).json({
+//           error: true,
+//           status: false,
+//           message: 'This game session has already been executed.'
+//         });
+//       }
+//       await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
+//       await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`,`checkgameid`,`details`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?),?,?)", [mobile, game_type, amount, mobile, uid + '_' + timestamp, JSON.stringify(details) || '']);
+//       await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
+//       return res.status(200).json({
+//         error: false,
+//         status: true,
+//         message: 'Wallet Balance SuccessFully Added.'
+//       });
+//     }
+//   } catch (err) {
+//     console.log(err);
+//     res.status(500).json({ error: true, message: "Internal Server Error" });
+//   }
+// })
 app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (req, res) => {
   try {
     const { mobile, data } = req.body;
     if (!data) {
       return res.status(400).json({ error: true, status: false, message: "Encrypted data is missing." });
     }
-    let ab;
+    let decryptedData;
     try {
-      ab = decrypt(data);
+      decryptedData = decrypt(data);
     } catch (err) {
       console.error("Decryption failed:", err.message);
       return res.status(400).json({ error: true, status: false, message: "Failed to decrypt input data." });
     }
-    const { amount, type, game_type, uid, timestamp, details } = JSON.parse(ab);
+    const { amount, type, game_type, uid, timestamp, details } = JSON.parse(decryptedData);
     if (!['add', 'deduct'].includes(type)) {
-      return res.status(302).json({
-        error: true,
-        status: false,
-        message: `Invalid type provided. Use 'add' or 'deduct'.`
-      });
+      return res.status(302).json({ error: true, status: false, message: "Invalid type. Use 'add' or 'deduct'." });
     }
     if (!mobile || !amount || !type || !game_type) {
       return res.status(302).json({
@@ -514,64 +676,63 @@ app.post("/add-balance-update", verifytoken, validateOriginAndUserAgent, async (
         message: `Missing required field: ${!mobile ? 'Mobile' : !amount ? 'Amount' : !game_type ? 'Game Type' : 'Type'}.`
       });
     }
-    console.log(JSON.parse(ab));
-    if (type === 'deduct') {
-      const transactionAmount = parseFloat(amount);
-      if (isNaN(transactionAmount) || transactionAmount <= 0) {
-        return res.status(302).json({
-          error: true,
-          status: false,
-          message: 'Invalid amount provided. Amount must be a positive number.'
-        });
-      }
-      const [user] = await queryAsync("SELECT game_wallet FROM `wallet` WHERE `user_name` = ?", [mobile]);
-      if (!user) {
-        return res.status(302).json({ error: true, status: false, message: 'User not found.' });
-      }
-      if (user.game_wallet < transactionAmount) {
-        return res.status(302).json({ error: true, status: false, message: 'Insufficient balance.' });
-      }
-      await queryAsync("UPDATE `wallet` SET `wagering` = `wagering` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync(`INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance,details) VALUES (?,'Add Bet',?,?,(SELECT (game_wallet) as balance FROM wallet WHERE user_name= ?),?)`, [mobile, game_type, amount, mobile, JSON.stringify(details) || '']);
-      await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
-      return res.status(200).json({
-        error: false,
-        status: true,
-        message: 'Wallet balance successfully deducted.'
-      });
+    const transactionAmount = parseFloat(amount);
+    if (isNaN(transactionAmount) || transactionAmount <= 0) {
+      return res.status(302).json({ error: true, status: false, message: "Invalid amount. Must be a positive number." });
     }
+    // **Handle Deduction**
+    if (type === 'deduct') {
+      try {
+        const [user] = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?", [mobile]);
+        if (!user) {
+          return res.status(302).json({ error: true, status: false, message: "User not found." });
+        }
+        if (user.game_wallet < transactionAmount) {
+          return res.status(302).json({ error: true, status: false, message: "Insufficient balance." });
+        }
+        await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` - ?, `wagering` = `wagering` + ?, `monthly_wagering` = `monthly_wagering` + ? WHERE `user_name` = ?", [transactionAmount, transactionAmount, transactionAmount, mobile]);
+        const [wagring_amount] = await queryAsync("SELECT * FROM `plans` WHERE `minimumrebetamount` < CAST((select w.wagering from wallet as w where w.user_name=?) AS DECIMAL(10,2)) ORDER by `id` DESC LIMIT 1", [mobile]);
+        const isNotEmpty = (obj) => obj && typeof obj === "object" && Object.keys(obj).length > 0;
+        if (isNotEmpty(wagring_amount)) {
+          await queryAsync("UPDATE `wagring_history` SET `vip_id` = ?, `levelup_check` = 'Y' WHERE (`vip_id` IS NULL OR`vip_id` != ?) AND`levelup_check` = 'N' AND`username` = ?;",
+            [wagring_amount.id, wagring_amount.id, mobile]);
+        }
+        await queryAsync(
+          `INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance, details) 
+          VALUES (?, 'Add Bet', ?, ?, (SELECT game_wallet FROM wallet WHERE user_name = ?), ?)`,
+          [mobile, game_type, amount, mobile, JSON.stringify(details) || '']
+        );
+        return res.status(200).json({ error: false, status: true, message: "Wallet balance successfully deducted." });
+      } catch (err) {
+        console.error("Deduction Error:", err);
+        return res.status(500).json({ error: true, message: "Internal Server Error" });
+      }
+    }
+    // **Handle Addition**
     if (type === 'add') {
-      const transactionAmount = parseFloat(amount);
-      if (isNaN(transactionAmount) || transactionAmount <= 0) {
-        return res.status(302).json({
-          error: true,
-          status: false,
-          message: 'Invalid amount provided. Amount must be a positive number.'
-        });
+      try {
+        const checkgameid = await queryAsync("SELECT * FROM `game_statement` WHERE `checkgameid` = ?", [uid + '_' + timestamp]);
+        if (checkgameid.length > 0) {
+          return res.status(302).json({ error: true, status: false, message: "This game session has already been executed." });
+        }
+        await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
+        await queryAsync(
+          `INSERT INTO game_statement(username, bet_type, game_type, bet_balance, total_balance, checkgameid, details) 
+          VALUES (?, 'Win Bet', ?, ?, (SELECT game_wallet FROM wallet WHERE user_name = ?), ?, ?)`,
+          [mobile, game_type, amount, mobile, uid + '_' + timestamp, JSON.stringify(details) || '']
+        );
+        return res.status(200).json({ error: false, status: true, message: "Wallet Balance Successfully Added." });
+      } catch (err) {
+        console.error("Addition Error:", err);
+        return res.status(500).json({ error: true, message: "Internal Server Error" });
       }
-      const checkgameid = await queryAsync("SELECT * FROM `game_statement` WHERE `checkgameid` = ?", [uid + '_' + timestamp]);
-      if (checkgameid.length > 0) {
-        return res.status(302).json({
-          error: true,
-          status: false,
-          message: 'This game session has already been executed.'
-        });
-      }
-      await queryAsync("UPDATE `wallet` SET `game_wallet` = `game_wallet` + ? WHERE `user_name` = ?", [transactionAmount, mobile]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`,`checkgameid`,`details`) VALUES (?,'Win Bet',?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?),?,?)", [mobile, game_type, amount, mobile, uid + '_' + timestamp, JSON.stringify(details) || '']);
-      await queryAsync("DELETE FROM `game_statement` WHERE `username` = ? AND `game_type` = ? AND `id` IN (SELECT id FROM (SELECT `id`  FROM `game_statement` WHERE `username` = ? AND `game_type` = ? ORDER BY `id` DESC LIMIT 18446744073709551615 OFFSET 40) AS subquery);", [mobile, game_type, mobile, game_type])
-      return res.status(200).json({
-        error: false,
-        status: true,
-        message: 'Wallet Balance SuccessFully Added.'
-      });
     }
   } catch (err) {
-    console.log(err);
+    console.error("Server Error:", err);
     res.status(500).json({ error: true, message: "Internal Server Error" });
   }
 })
+
 
 app.post("/get-casino-games", async (req, res) => {
   try {
@@ -627,8 +788,6 @@ app.post("/get-single-casino", async (req, res) => {
     });
   }
 })
-
-
 app.post("/update-user-details", verifytoken, async (req, res) => {
   try {
     const cid = req.body.mobile;
@@ -728,6 +887,7 @@ app.post("/get-otp", async (req, res) => {
       html: `Your OTP is <b>${val.toString()}</b>, valid for 10 min`,
     };
     const check = await transporter.sendMail(mailOptions);
+    console.log(check)
     if (result.length > 0) {
       await queryAsync("UPDATE `otp` SET `otp` = ? WHERE `number` = ?", [hash, email]);
     } else {
@@ -1082,7 +1242,7 @@ app.post("/deposit-request", upload.single("image"), verifytoken, async (req, re
     if (parseInt(amount) < 100) {
       return res.status(302).json({ error: true, status: false, message: "Minimum Balance withdrawal is 100." });
     }
-    const depositExists = await queryAsync("SELECT * FROM `deposit` WHERE `user_name` = ? AND `payment_type` = 'Deposit' AND `status` = 'Pending'", [mobile]);
+    const depositExists = await queryAsync("SELECT * FROM `deposit` WHERE `user_name` = ? AND `payment_type` = 'Deposit' AND `status` = 'Pending';", [mobile]);
     if (depositExists.length > 0) {
       if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
       return res.status(302).json({
@@ -1091,7 +1251,7 @@ app.post("/deposit-request", upload.single("image"), verifytoken, async (req, re
         message: "A deposit request has already been submitted. Please check your requests.",
       });
     }
-    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?", [transection_id]);
+    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?;", [transection_id]);
     if (deposittrasaction.length > 0) {
       if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
       return res.status(302).json({
@@ -1107,11 +1267,11 @@ app.post("/deposit-request", upload.single("image"), verifytoken, async (req, re
         message: "An image file is required to proceed with the deposit request.",
       });
     }
-    const paymentdetailss = await queryAsync("SELECT * FROM `new_payment_details` WHERE `id` = ?", [deposit_id]);
+    const paymentdetailss = await queryAsync("SELECT * FROM `new_payment_details` WHERE `id` = ?;", [deposit_id]);
     const abb = paymentdetailss[0];
     if (abb.type == 'Bank') {
       const insertResult = await queryAsync(
-        "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `transaction_id`, `bank_name`, `ifsc_code`, `ac_no`, `ac_name`, `ac_type`, `type`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `transaction_id`, `bank_name`, `ifsc_code`, `ac_no`, `ac_name`, `ac_type`, `type`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?);",
         [mobile, amount, req.file.filename, req.file.destination + '/', 'Deposit', transection_id, abb.bank_name, abb.ifsc_code, abb.ac_no, abb.name, abb.ac_type, abb.type]
       );
       if (insertResult) {
@@ -1123,7 +1283,7 @@ app.post("/deposit-request", upload.single("image"), verifytoken, async (req, re
       }
     } else {
       const insertResult = await queryAsync(
-        "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `transaction_id`,`upi_id`,`ac_name`,`type`) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `transaction_id`,`upi_id`,`ac_name`,`type`) VALUES (?,?,?,?,?,?,?,?,?);",
         [mobile, amount, req.file.filename, req.file.destination + '/', 'Deposit', transection_id, abb.upi_id, abb.name, abb.type]
       );
       if (insertResult) {
@@ -1147,7 +1307,7 @@ app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (re
     if (parseInt(amount) < 10) {
       return res.status(302).json({ error: true, status: false, message: "Minimum Balance Deposit is 10(USDT)." });
     }
-    const depositExists = await queryAsync("SELECT * FROM `deposit` WHERE`user_name` = ? AND (`payment_type` = 'USDT' OR`payment_type` = 'Deposit') AND(`transaction_id` IS NOT NULL AND`transaction_id` != '') AND`status` = 'Pending'",
+    const depositExists = await queryAsync("SELECT * FROM `deposit` WHERE`user_name` = ? AND (`payment_type` = 'USDT' OR`payment_type` = 'Deposit') AND(`transaction_id` IS NOT NULL AND`transaction_id` != '') AND`status` = 'Pending';",
       [mobile]);
     if (depositExists.length > 0) {
       if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
@@ -1157,7 +1317,7 @@ app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (re
         message: "A Deposit Request has already been submitted. Please check your requests.",
       });
     }
-    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?", [transection_id]);
+    const deposittrasaction = await queryAsync("SELECT * FROM `deposit` WHERE `transaction_id` = ?;", [transection_id]);
     if (deposittrasaction.length > 0) {
       if (req.file) deleteImage(req.file.destination + '/' + req.file.filename);
       return res.status(302).json({
@@ -1173,7 +1333,7 @@ app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (re
         message: "An image file is required for the deposit request.",
       });
     }
-    const usdt = await queryAsync("SELECT * FROM `usdt` WHERE `status` = 'Y'");
+    const usdt = await queryAsync("SELECT * FROM `usdt` WHERE `status` = 'Y';");
     if (usdt[0].price !== price_at_time) {
       return res.status(302).json({
         error: true,
@@ -1189,7 +1349,7 @@ app.post("/deposit-usdt-request", upload.single("image"), verifytoken, async (re
       });
     }
     const insertResult = await queryAsync(
-      "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `cypto`, `transaction_id`, `currency`, `price_at_that_time`,`type`) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO `deposit`(`user_name`, `balance`, `image`, `image_path`, `payment_type`, `cypto`, `transaction_id`, `currency`, `price_at_that_time`,`type`) VALUES (?,?,?,?,?,?,?,?,?,?);",
       [mobile, amount, req.file.filename, req.file.destination + '/', 'Deposit', deposit_id, transection_id, currency, price_at_time, 'USDT']
     );
     if (insertResult) {
@@ -1233,7 +1393,6 @@ app.post("/get-deposit-request", verifytoken, async (req, res) => {
   }
 })
 
-//Bank Details
 app.post("/update-bankdetails", verifytoken, async (req, res) => {
   try {
     const { bank_name, ifsc_code, ac_no, ac_name, ac_type, mobile, reason } = req.body;
@@ -1268,6 +1427,10 @@ app.post("/add-withdrawal-request", verifytoken, async (req, res) => {
     const { mobile, amount, pin } = req.body;
     if (!pin) {
       return res.status(302).json({ error: true, status: false, message: "You must provide the required secret code." });
+    }
+    const existingdepositRequest = await queryAsync("SELECT * FROM `deposit` WHERE `user_name` = ? AND `payment_type` = 'Deposit' AND `status` = 'Success'", [mobile]);
+    if (existingdepositRequest.length == 0) {
+      return res.status(302).json({ error: true, status: false, message: "You must first successfully add a deposit." });
     }
     const check = await queryAsync('SELECT * FROM `user_pin` WHERE `user_id` = (SELECT ud.id FROM `user_details` as ud WHERE `mobile` = ?)', [mobile]);
     if (check.length == 0) {
@@ -1554,27 +1717,27 @@ app.post("/get-plans", async (req, res) => {
 })
 app.post("/get-statement", verifytoken, async (req, res) => {
   try {
-    if (!req.body.mobile) {
-      return res.status(302).json({
-        error: true,
-        status: false,
-        message: "Invalid or missing 'Mobile' parameter"
-      });
+    const { mobile, type } = req.body;
+    if (!mobile) {
+      return res.status(400).json({ error: true, status: false, message: "Invalid or missing 'Mobile' parameter" });
     }
-    const result = await queryAsync("SELECT * FROM `statement` where `number`=?", [req.body.mobile]);
-    res.status(200).json(
+    let query = "SELECT * FROM `statement` WHERE `number` = ?";
+    let params = [mobile];
+    if (type) {
+      query = "SELECT * FROM `statement` WHERE (`number` = ? AND type = 'Level-Up Reward') or (`number` = ? AND type = 'Monthly Reward');";
+      params.push(mobile);
+    }
+    const result = await queryAsync(query, params);
+    return res.status(200).json(
       result.length
         ? { error: false, status: true, data: result }
-        : { error: false, status: false, message: "No records found", data: [] }
+        : { error: false, status: true, message: "No records found", data: [] }
     );
   } catch (err) {
-    res.status(500).json({
-      error: true,
-      status: false,
-      message: "Internal Server Error"
-    });
+    console.error("Error in /get-statement:", err);
+    return res.status(500).json({ error: true, status: false, message: "Internal Server Error" });
   }
-})
+});
 app.post("/get-game-statement", verifytoken, async (req, res) => {
   try {
     if (!req.body.type) {
@@ -1584,7 +1747,7 @@ app.post("/get-game-statement", verifytoken, async (req, res) => {
         message: "Invalid or missing 'type' parameter"
       });
     }
-    const result = await queryAsync("SELECT * FROM `game_statement` WHERE `game_type` = ?", [req.body.type]);
+    const result = await queryAsync("SELECT * FROM `game_statement` WHERE `game_type` = ? ORDER BY `id` DESC LIMIT 40", [req.body.type]);
     const parsedData = result.map(item => ({
       ...item,
       details: (() => {
@@ -1618,6 +1781,28 @@ app.post("/get-level-income", verifytoken, async (req, res) => {
       });
     }
     const result = await queryAsync("SELECT li.`id`, li.`mobile`, li.`level`, li.`position`, (SELECT ud.`username` FROM `user_details` as ud WHERE ud.`reffer_code` = li.`user_reffral`) as user_name, li.`retrun_amount`, li.`date` FROM `level_income` as li WHERE li.`mobile` = ?", [req.body.mobile]);
+    res.status(200).json(
+      result.length ? { error: false, status: true, data: result } : { error: false, status: false, message: "No records found", data: [] }
+    );
+  } catch (err) {
+    console.error("Error in /get-game-statement:", err);
+    res.status(500).json({
+      error: true,
+      status: false,
+      message: "Internal Server Error"
+    });
+  }
+})
+app.post("/get-matching-income", verifytoken, async (req, res) => {
+  try {
+    if (!req.body.mobile) {
+      return res.status(302).json({
+        error: true,
+        status: false,
+        message: "Invalid or missing 'mobile' parameter"
+      });
+    }
+    const result = await queryAsync("SELECT * FROM `user_matching_income` WHERE `mobile` = ?", [req.body.mobile]);
     res.status(200).json(
       result.length ? { error: false, status: true, data: result } : { error: false, status: false, message: "No records found", data: [] }
     );
@@ -1667,6 +1852,7 @@ app.post("/make-new-investment", verifytoken, async (req, res) => {
               "INSERT INTO `buy_plan` (`user_id`, `plan_id`, `amount`) VALUES ((SELECT ud.`id` FROM `user_details` as ud WHERE ud.`mobile` = ?), ?, ?)",
               [mobile, check[0].id, amount]
             );
+            await givematchingincome(mobile, check[0].id);
             // await queryAsync("UPDATE `user_reffer` SET `plancheck`= 'Y' WHERE `reffer_by` = (SELECT ud.`reffer_code` FROM `user_details` as ud WHERE ud.`mobile`=?) and `plancheck` = 'N'", [mobile]);
             return res.status(200).json({ error: false, status: true });
           } else {
@@ -1710,23 +1896,23 @@ app.post("/get-investment-plan", async (req, res) => {
 app.post("/color-money-transfer", verifytoken, async (req, res) => {
   try {
     const { mobile, amount, pin, type } = req.body;
-    const check = await queryAsync('SELECT * FROM `user_pin` WHERE `user_id` = (SELECT ud.id FROM `user_details` as ud WHERE ud.`mobile` = ?)', [mobile]);
+    const check = await queryAsync('SELECT * FROM `user_pin` WHERE `user_id` = (SELECT ud.id FROM `user_details` as ud WHERE ud.`mobile` = ?);', [mobile]);
     if (!check.length) return res.status(302).json({ error: true, status: false, message: "Secret PIN not found. Please create your PIN to proceed." });
     if (!bcrypt.compareSync(pin, check[0].pin)) return res.status(302).json({ error: true, status: false, message: "Incorrect PIN. Please enter the correct PIN." });
 
-    const owner = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?", [mobile]);
-    if (!owner.length) await queryAsync("INSERT INTO `wallet`(`user_name`, `game_wallet`) VALUES (?,'0')", [mobile]);
+    const owner = await queryAsync("SELECT * FROM `wallet` WHERE `user_name` = ?;", [mobile]);
+    if (!owner.length) await queryAsync("INSERT INTO `wallet`(`user_name`, `game_wallet`) VALUES (?,'0');", [mobile]);
     if (type == '1') {
       if (parseFloat(owner[0].wallet_balance) < parseFloat(amount)) return res.status(302).json({ error: true, status: false, message: `Insufficient Balance in MainWallet.` });
-      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance`-?, `game_wallet`=`game_wallet`+? WHERE `user_name` = ?;", [parseInt(amount), parseInt(amount), mobile]);
-      await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [mobile, 'Money Transfer', `Sent To GameWallet`, parseInt(amount), mobile]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, 'Money Transfer', `Received`, parseInt(amount), mobile]);
+      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` - ?, `game_wallet`=`game_wallet` + ? WHERE `user_name` = ?;", [parseInt(amount), parseInt(amount), mobile]);
+      await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?));', [mobile, 'Money Transfer', `Sent To GameWallet`, parseInt(amount), mobile]);
+      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?));", [mobile, 'Money Transfer', `Received`, parseInt(amount), mobile]);
       return res.status(200).json({ error: false, status: true, message: "Transfer SuccessFully." });
     } else if (type == '2') {
       if (parseFloat(owner[0].game_wallet) < parseFloat(amount)) return res.status(302).json({ error: true, status: false, message: `Insufficient Balance in GameWallet.` });
       await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance`+?, `game_wallet`=`game_wallet`-? WHERE `user_name` = ?;", [parseInt(amount), parseInt(amount), mobile]);
-      await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?))', [mobile, 'Money Transfer', `Received from GameWallet`, parseInt(amount), mobile]);
-      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?))", [mobile, 'Money Transfer', `Send`, parseInt(amount), mobile]);
+      await queryAsync('INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?,?,?,?,(select w.`wallet_balance` from `wallet` as w where  w.`user_name` = ?));', [mobile, 'Money Transfer', `Received from GameWallet`, parseInt(amount), mobile]);
+      await queryAsync("INSERT INTO `game_statement`(`username`, `bet_type`, `game_type`, `bet_balance`, `total_balance`) VALUES (?,?,?,?,(SELECT (`game_wallet`) as balance FROM `wallet` WHERE `user_name`= ?));", [mobile, 'Money Transfer', `Send`, parseInt(amount), mobile]);
       return res.status(200).json({ error: false, status: true, message: "Transfer SuccessFully." });
     } else {
       return res.status(302).json({ error: true, status: false, message: "Invalid Transfer Type." });
@@ -1826,7 +2012,42 @@ app.post('/get-current-time', async (req, res) => {
     });
   }
 })
-
+app.post("/claim-reward", verifytoken, async (req, res) => {
+  try {
+    const { mobile, type } = req.body;
+    if (!['levelup', 'monthly'].includes(type)) {
+      return res.status(302).json({ error: true, status: false, message: "Invalid type. Use 'levelup' or 'monthly'." });
+    }
+    if (type == 'levelup') {
+      const checkbank = await queryAsync("SELECT * FROM `wagring_history` WHERE `username` = ? AND `levelup_check` = 'Y';", [mobile]);
+      if (checkbank === 0) {
+        return res.status(302).json({ error: true, status: false, message: "Already Claimed Level-Up Reward." });
+      }
+      const [amount] = await queryAsync("SELECT `levelreward` FROM `plans` WHERE `id` = ?;", [checkbank[0].vip_id]);
+      await queryAsync("UPDATE `wagring_history` SET `levelup_check`='N' WHERE `username` = ?;", [mobile]);
+      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + ? WHERE `user_name` = ?;", [amount.levelreward, mobile]);
+      await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?, ?, ?, ?, (SELECT `wallet_balance` FROM `wallet` WHERE `user_name` = ?));",
+        [mobile, 'Level-Up Reward', `Claimed From Level: ${amount.levelreward}`, amount.levelreward, mobile]);
+      return res.status(200).json({ error: false, status: true, message: "Claimed Reward Successfully.", amount: amount.levelreward });
+    }
+    if (type == 'monthly') {
+      const checkbank = await queryAsync("SELECT * FROM `wagring_history` WHERE `username` = ? AND `monthly_reward` = 'Y';", [mobile]);
+      if (checkbank === 0) {
+        return res.status(302).json({ error: true, status: false, message: "Already Claimed Monthly Reward." });
+      }
+      const [amount] = await queryAsync("SELECT * FROM `plans` WHERE `id` = ?;", [checkbank[0].vip_id]);
+      const cal_amount = parseFloat(checkbank[0].monthly_wagering * (amount.monthyreward / 100)).toFixed(2);
+      await queryAsync("UPDATE `wagring_history` SET `monthly_reward`='N',`monthly_wagering` = '0' WHERE `username` = ?;", [mobile]);
+      await queryAsync("UPDATE `wallet` SET `wallet_balance` = `wallet_balance` + ? WHERE `user_name` = ?;", [cal_amount, mobile]);
+      await queryAsync("INSERT INTO `statement`(`number`, `type`, `description`, `amount`,`balance`) VALUES (?, ?, ?, ?, (SELECT `wallet_balance` FROM `wallet` WHERE `user_name` = ?));",
+        [mobile, 'Monthly Reward', `Claimed Monthly Reward: ${cal_amount}`, cal_amount, mobile]);
+      return res.status(200).json({ error: false, status: true, message: "Claimed Reward Successfully.", amount: cal_amount });
+    }
+  } catch (err) {
+    console.error("Error in claim-reward:", err);
+    return res.status(500).json({ error: true, status: false, message: "An error occurred while processing the reward claim." });
+  }
+});
 
 async function sendMail(name, email, mobile, message) {
   try {
@@ -1863,7 +2084,6 @@ async function coded() {
     throw error;
   }
 }
-
 async function addUser(name, referralId, position) {
   let newUserId;
   const parent = await queryAsync('SELECT id FROM `user_details` WHERE id = ?', [referralId]);
@@ -2097,11 +2317,24 @@ cron.schedule('0 0 * * *', async () => {
     await queryAsync(
       "UPDATE buy_plan SET status = 'expire' WHERE status = 'ongoing' AND amount * 2 <= total_return_amount;"
     );
-
   } catch (error) {
     console.error("Error during cron job:", error);
   }
+})
+cron.schedule('0 0 28-31 * *', async () => {
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  if (tomorrow.getDate() === 1) {
+    const wagering = await queryAsync("SELECT * FROM wallet;");
+    for (const element of wagering) {
+      await queryAsync("UPDATE `wagring_history` SET `monthly_reward`=?, `monthly_wagering`=? WHERE `username`=?", ['Y', element.monthly_wagering, element.user_name]);
+    }
+    await queryAsync("UPDATE `wallet` SET `monthly_wagering` = ?", [0]);
+  }
 });
+
+
 function validateEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
@@ -2143,7 +2376,7 @@ const getUserHierarchy = async (baseRefferCode, maxLevel, currentLevel = 1, hier
     }, {})
   );
   return mergedData;
-};
+}
 function filterByUniqueId(data) {
   return Object.values(
     data.reduce((acc, item) => {
@@ -2158,48 +2391,164 @@ const givelevelincome = async (baseRefferCode) => {
   if (!baseRefferCode) {
     throw new Error("Base reference code is required.");
   }
-  const get_percentage = await queryAsync("SELECT * FROM `level`;", []);
-  if (!get_percentage || get_percentage.length === 0) {
-    throw new Error("Level percentage data not found.");
-  }
-  const priceResult = await queryAsync("SELECT `price` FROM `usdt` WHERE `status` = ?;", ['Y']);
-  if (!priceResult || priceResult.length === 0) {
-    throw new Error("USDT price not found.");
-  }
-  const price = parseFloat(priceResult[0].price);
-  const hierarchy = await getUserHierarchy(baseRefferCode, get_percentage.length);
-  for (const element of hierarchy) {
-    for (const user of element.users) {
-      try {
-        const calculated_return_amount = parseFloat(
-          user.calculated_return_amount * (parseFloat(get_percentage[element.level - 1].percentage) / 100)
-        ).toFixed(5);
-        await queryAsync(
-          `INSERT INTO level_income (mobile, level, position, user_reffral, retrun_amount) VALUES 
-           ((SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?),?,?,?,?);`,
-          [baseRefferCode, element.level, user.position, user.reffer_code, calculated_return_amount]
-        );
-        await queryAsync("UPDATE buy_plan SET total_return_amount = total_return_amount + ? WHERE id = ?", [calculated_return_amount, user.plan_id])
-        // console.log([baseRefferCode, element.level, user.position, user.reffer_code, calculated_return_amount]);        
-        const totalAmount = parseFloat(calculated_return_amount * price).toFixed(5);
-        await queryAsync(
-          `UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = 
-           (SELECT ud.mobile FROM user_details as ud WHERE ud.reffer_code = ?);`,
-          [totalAmount, baseRefferCode]
-        );
-        // console.log([totalAmount, baseRefferCode]);        
-      } catch (error) {
-        console.error(`Error processing user ${user.reffer_code} at level ${element.level}:`, error);
-        throw error;
+  try {
+    const get_percentage = await queryAsync("SELECT * FROM `level`;");
+    if (!get_percentage.length) {
+      throw new Error("Level percentage data not found.");
+    }
+    const priceResult = await queryAsync("SELECT `price` FROM `usdt` WHERE `status` = ?;", ['Y']);
+    if (!priceResult.length) {
+      throw new Error("USDT price not found.");
+    }
+    const price = parseFloat(priceResult[0].price);
+    const hierarchy = await getUserHierarchy(baseRefferCode, get_percentage.length);
+    for (const element of hierarchy) {
+      for (const user of element.users) {
+        try {
+          const calculated_return_amount = parseFloat(
+            user.calculated_return_amount * (parseFloat(get_percentage[element.level - 1].percentage) / 100)
+          ).toFixed(5);
+          const totalAmount = parseFloat(calculated_return_amount * price).toFixed(5);
+          await queryAsync("START TRANSACTION;");
+          await queryAsync(
+            `INSERT INTO level_income (mobile, level, position, user_reffral, retrun_amount) 
+             VALUES ((SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?),?,?,?,?);`,
+            [baseRefferCode, element.level, user.position, user.reffer_code, calculated_return_amount]
+          );
+          await queryAsync(
+            "UPDATE buy_plan SET total_return_amount = total_return_amount + ? WHERE id = ?",
+            [calculated_return_amount, user.plan_id]
+          );
+          await queryAsync(
+            `UPDATE wallet SET wallet_balance = wallet_balance + ? 
+             WHERE user_name = (SELECT ud.mobile FROM user_details as ud WHERE ud.reffer_code = ?);`,
+            [totalAmount, baseRefferCode]
+          );
+          await queryAsync(
+            `INSERT INTO statement (number, type, description, amount, balance) 
+             VALUES (
+               (SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?), ?, 
+               CONCAT(?, (SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?)), ?, 
+               (SELECT wallet_balance FROM wallet WHERE user_name = (SELECT ud.mobile FROM user_details AS ud WHERE ud.reffer_code = ?))
+             );`,
+            [baseRefferCode, 'Level-Income', `Level-${element.level}||${user.position}||`, user.reffer_code, totalAmount, baseRefferCode]
+          );
+          await queryAsync("COMMIT;");
+        } catch (error) {
+          await queryAsync("ROLLBACK;");
+          console.error(`❌ Error processing user ${user.reffer_code} at level ${element.level}:`, error);
+        }
       }
     }
+    return { status: 'success', hierarchyProcessed: hierarchy.length };
+  } catch (error) {
+    console.error("🚨 Critical Error in givelevelincome function:", error);
+    throw error;
   }
-
-  return { status: 'success', hierarchyProcessed: hierarchy.length };
 }
-const givematchingincome = async (mobile) => {
-  const leftcheck = await queryAsync("SELECT bp.*,ur.reffer_to,ur.reffer_by,ur.position FROM `buy_plan` as bp INNER join user_details as ud on bp.user_id = ud.id INNER JOIN user_reffer as ur on ud.reffer_code = ur.reffer_by where bp.pair = 'N';", [mobile]);
-  // const rightcheck = await queryAsync("SELECT * FROM `user_reffer` WHERE `reffer_to` = (select ud.`reffer_code` from user_details as ud where ud.mobile = ?) AND `position` = 'R' ORDER BY `id` ASC Limit 1;", [mobile]);
+// const givematchingincome = async (mobile, plan) => {
+//   try {
+//     const getamount = await queryAsync("SELECT matching FROM new_investment_plan WHERE id = ? LIMIT 1", [plan]);
+//     if (!getamount.length) return null;
+//     const users = await queryAsync("SELECT * FROM user_details WHERE mobile = ? LIMIT 1", [mobile]);
+//     if (!users.length) return null;
+//     const user = users[0];
+//     const oppositePosition = user.position === 'L' ? 'R' : 'L';
+//     const result = await queryAsync(
+//       `SELECT bp.*, ur.reffer_to, ur.reffer_by, ur.position, ud.mobile FROM buy_plan bp INNER JOIN user_details ud ON bp.user_id = ud.id INNER JOIN user_reffer ur
+//        ON ud.reffer_code = ur.reffer_by WHERE bp.pair = 'N' AND ur.position = ? AND ur.reffer_to = ? AND bp.plan_id = ? ORDER BY bp.id ASC LIMIT 1`,
+//       [oppositePosition, user.reffer_by, plan]
+//     );
+//     if (!result.length) return;
+//     const userresult = await queryAsync(
+//       `SELECT bp.*, ur.reffer_to, ur.reffer_by, ur.position, ud.mobile FROM buy_plan bp INNER JOIN user_details ud ON bp.user_id = ud.id INNER JOIN user_reffer ur ON
+//        ud.reffer_code = ur.reffer_by WHERE bp.pair = 'N' AND ur.position = ? AND ud.mobile = ? AND bp.plan_id = ? ORDER BY bp.id ASC LIMIT 1`,
+//       [user.position, mobile, plan]
+//     );
+//     if (!userresult.length) return;
+//     await queryAsync("START TRANSACTION;");
+//     await queryAsync("UPDATE buy_plan SET pair='Y' WHERE id IN (?, ?)", [result[0].id, userresult[0].id]);
+//     await queryAsync(
+//       `UPDATE wallet SET wallet_balance = wallet_balance + ? WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1)`,
+//       [getamount[0].matching, user.reffer_by]
+//     );
+//     await queryAsync(
+//       `INSERT INTO user_matching_income (mobile, plan, user_1, user_2, matching_amount, balance) VALUES ((SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1), (SELECT plan_name FROM new_investment_plan WHERE id = ? LIMIT 1), ?, ?, ?, (SELECT wallet_balance FROM wallet WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1)))`,
+//       [user.reffer_by, plan, `${result[0].mobile}(${result[0].position})`, `${userresult[0].mobile}(${userresult[0].position})`, getamount[0].matching, user.reffer_by]
+//     );
+//     await queryAsync(
+//       `INSERT INTO statement (number, type, description, amount, balance) VALUES ((SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1), ?, CONCAT(?, (SELECT plan_name FROM new_investment_plan WHERE id = ? LIMIT 1)), ?, (SELECT wallet_balance FROM wallet WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1) LIMIT 1))`,
+//       [user.reffer_by, 'Matching-Income', `Pair:- ${userresult[0].mobile}(${userresult[0].position}) And Pair:- ${result[0].mobile}(${result[0].position}) || Active-Plan:- `, plan, getamount[0].matching, user.reffer_by]
+//     );
+//     await queryAsync("COMMIT;");
+//   } catch (error) {
+//     await queryAsync("ROLLBACK;");
+//     console.error("🚨 Error in givematchingincome:", error);
+//   }
+// }
+const givematchingincome = async (mobile, plan) => {
+  try {
+    const [planData] = await queryAsync("SELECT matching FROM new_investment_plan WHERE id = ? LIMIT 1", [plan]);
+    if (!planData) return;
+    const [user] = await queryAsync("SELECT * FROM user_details WHERE mobile = ? LIMIT 1", [mobile]);
+    if (!user) return;
+    const oppositePosition = user.position === "L" ? "R" : "L";
+    const [oppositePair] = await queryAsync(
+      `SELECT bp.*, ur.position, ud.mobile FROM buy_plan bp 
+       INNER JOIN user_details ud ON bp.user_id = ud.id 
+       INNER JOIN user_reffer ur ON ud.reffer_code = ur.reffer_by 
+       WHERE bp.pair = 'N' AND ur.position = ? AND ur.reffer_to = ? AND bp.plan_id = ? 
+       ORDER BY bp.id ASC LIMIT 1`,
+      [oppositePosition, user.reffer_by, plan]
+    );
+    if (!oppositePair) return;
+    const [userPair] = await queryAsync(
+      `SELECT bp.*, ur.position, ud.mobile FROM buy_plan bp 
+       INNER JOIN user_details ud ON bp.user_id = ud.id 
+       INNER JOIN user_reffer ur ON ud.reffer_code = ur.reffer_by 
+       WHERE bp.pair = 'N' AND ur.position = ? AND ud.mobile = ? AND bp.plan_id = ? 
+       ORDER BY bp.id ASC LIMIT 1`,
+      [user.position, mobile, plan]
+    );
+    if (!userPair) return;
+    await queryAsync("START TRANSACTION");
+    await queryAsync("UPDATE buy_plan SET pair='Y' WHERE id IN (?, ?)", [oppositePair.id, userPair.id]);
+    await queryAsync(
+      `UPDATE wallet SET wallet_balance = wallet_balance + ? 
+       WHERE user_name = (SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1)`,
+      [planData.matching, user.reffer_by]
+    );
+    const referrerMobileQuery = `(SELECT mobile FROM user_details WHERE reffer_code = ? LIMIT 1)`;
+    const walletBalanceQuery = `(SELECT wallet_balance FROM wallet WHERE user_name = ${referrerMobileQuery})`;
+    const planNameQuery = `(SELECT plan_name FROM new_investment_plan WHERE id = ? LIMIT 1)`;
+    await queryAsync(
+      `INSERT INTO user_matching_income (mobile, plan, user_1, user_2, matching_amount, balance) 
+       VALUES (${referrerMobileQuery}, ${planNameQuery}, ?, ?, ?, ${walletBalanceQuery})`,
+      [
+        user.reffer_by,
+        plan,
+        `${oppositePair.mobile}(${oppositePair.position})`,
+        `${userPair.mobile}(${userPair.position})`,
+        planData.matching,
+        user.reffer_by,
+      ]
+    );
+    await queryAsync(
+      `INSERT INTO statement (number, type, description, amount, balance) VALUES (${referrerMobileQuery}, ?, ?, ?, ${walletBalanceQuery})`,
+      [
+        user.reffer_by,
+        "Matching-Income",
+        `Pair:- ${userPair.mobile}(${userPair.position}) And Pair:- ${oppositePair.mobile}(${oppositePair.position}) || Active-Plan:- ${planNameQuery}`,
+        plan,
+        planData.matching,
+        user.reffer_by,
+      ]
+    );
+    await queryAsync("COMMIT");
+  } catch (error) {
+    await queryAsync("ROLLBACK");
+    console.error("🚨 Error in givematchingincome:", error);
+  }
 }
-// console.log(givelevelincome('5Zw8gbwv'));
+// console.log(await givelevelincome('5Zw8gbwv'));
 module.exports = app;
